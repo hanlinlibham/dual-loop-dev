@@ -10,7 +10,9 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import signal
+import subprocess
 import sys
 import time
 
@@ -56,6 +58,57 @@ def append_event(state_dir: Path, event_type: str, payload: dict) -> None:
     rec = {"at": now_iso(), "event": event_type, **payload}
     with (state_dir / "roadmap-events.jsonl").open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+
+def detect_dependency_cycles(tasks_map: dict[str, dict]) -> None:
+    in_degree: dict[str, int] = {tid: 0 for tid in tasks_map}
+    dependents: dict[str, list[str]] = {tid: [] for tid in tasks_map}
+    for tid, tdata in tasks_map.items():
+        deps = list(dict.fromkeys(tdata.get("depends_on", [])))
+        for dep in deps:
+            if dep in tasks_map:
+                in_degree[tid] += 1
+                dependents[dep].append(tid)
+    ready = [tid for tid, deg in in_degree.items() if deg == 0]
+    visited = 0
+    while ready:
+        cur = ready.pop(0)
+        visited += 1
+        for nxt in dependents[cur]:
+            in_degree[nxt] -= 1
+            if in_degree[nxt] == 0:
+                ready.append(nxt)
+    if visited < len(tasks_map):
+        cycle_ids = sorted(tid for tid, deg in in_degree.items() if deg > 0)
+        raise ValueError(f"dependency cycle detected in roadmap: {', '.join(cycle_ids)}")
+
+
+def archive_and_reset_dirty_worktree(exec_repo: Path, task_state_dir: Path) -> str | None:
+    porcelain = worktree_mod.git(exec_repo, "status", "--porcelain")
+    if not porcelain:
+        return None
+    snap_dir = task_state_dir / "uncommitted-snapshot"
+    snap_dir.mkdir(parents=True, exist_ok=True)
+    (snap_dir / "status.txt").write_text(porcelain + "\n", encoding="utf-8")
+    diff_bytes = subprocess.run(
+        ["git", "-C", str(exec_repo), "diff", "HEAD", "--binary"],
+        capture_output=True,
+        check=False,
+    ).stdout
+    (snap_dir / "tracked.patch").write_bytes(diff_bytes)
+    for rel in orchestrator_mod._worktree_dirty_paths(exec_repo):
+        src = exec_repo / rel
+        dst = snap_dir / "files" / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if src.is_symlink():
+            if dst.exists() or dst.is_symlink():
+                dst.unlink()
+            os.symlink(os.readlink(src), dst)
+        elif src.is_file():
+            shutil.copy2(src, dst)
+    worktree_mod.git(exec_repo, "reset", "--hard", "HEAD")
+    worktree_mod.git(exec_repo, "clean", "-fd")
+    return str(snap_dir)
 
 
 def write_progress_markdown(state_dir: Path, state: dict) -> Path:
@@ -151,6 +204,7 @@ def sync_roadmap_state(roadmap: dict, state_dir: Path) -> dict:
         else:
             state["tasks"][tid]["depends_on"] = task_def.get("depends_on", state["tasks"][tid]["depends_on"])
 
+    detect_dependency_cycles(state["tasks"])
     save_json(state_file, state)
     write_progress_markdown(state_dir, state)
     return state
@@ -221,8 +275,18 @@ def run_queue_pass(roadmap_file: Path, state_dir: Path, stop_flag: dict[str, boo
                 append_event(state_dir, "task_finish", res)
                 progressed = True
 
-                if res["status"] != "accepted" and not continue_independent:
-                    return state
+                if res["status"] != "accepted":
+                    if not continue_independent:
+                        return state
+                    snap = archive_and_reset_dirty_worktree(Path(state["execution_repo"]), task_state_dir)
+                    if snap:
+                        entry["uncommitted_snapshot"] = snap
+                        save_json(state_dir / "roadmap-state.json", state)
+                        append_event(
+                            state_dir,
+                            "worktree_reset_for_independent_tasks",
+                            {"failed_task": tid, "snapshot": snap},
+                        )
                 break
 
     if (
@@ -235,6 +299,7 @@ def run_queue_pass(roadmap_file: Path, state_dir: Path, stop_flag: dict[str, boo
             Path(state["repo"]),
             worktree=Path(state["execution_repo"]),
             strategy=roadmap.get("integrate_strategy", "ff-only"),
+            state_dir=state_dir,
         )
         state["integration"] = integration
         save_json(state_dir / "roadmap-state.json", state)

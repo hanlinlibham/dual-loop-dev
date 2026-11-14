@@ -113,9 +113,9 @@ python3 "$DL/scripts/roadmap.py" daemon --roadmap roadmap.json --state-dir "$STA
 
 - `accept` 后在本地（或隔离 Worktree）提交，提交消息末行固定附审计尾注：
   `Accepted in supervised round <case> (review <review_hash_8>)`
-- 将隔离 Worktree 合入主分支（自动校验每个提交均带合法审阅尾注）：
+- 将隔离 Worktree 合入主分支（自动校验每个提交均带合法审阅尾注并与封存账本哈希一致）：
   ```sh
-  python3 "$DL/scripts/worktree.py" integrate --repo <主仓库> --worktree <隔离Worktree>
+  python3 "$DL/scripts/worktree.py" integrate --repo <主仓库> --worktree <隔离Worktree> --state-dir <状态目录>
   ```
 - 收尾汇总数字一律用脚本从 Git 实算，禁止凭记忆手写：
   ```sh

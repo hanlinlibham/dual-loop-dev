@@ -158,11 +158,11 @@ Use a **fresh-context** Reviewer (copying only `reviewer.key` to `$STATE/worker-
 1. Do **NOT** modify any file in `$WORK_REPO`.
 2. Inspect `git -C "$WORK_REPO" diff HEAD`, `git -C "$WORK_REPO" status --porcelain`, and `$CTRL/rounds/001/execution.json` + check `.log` files.
 3. Copy relevant files to `/tmp` and run a **counterexample / mutation probe** (remove the new guard or feed adversarial inputs in `/tmp` to confirm tests genuinely catch regressions).
-4. Write evidence under `$CASE/outputs/review-evidence.md`. Compute the SHA-256 of the frozen baseline file (`BASELINE_SHA=$(python3 -c 'import hashlib,json,pathlib; c=pathlib.Path("'"$CASE"'"); s=json.loads((c/"spec.json").read_text()); print(hashlib.sha256((c/s["baseline"]).read_bytes()).hexdigest())')`) and write `$CASE/outputs/observations.json`:
+4. Write evidence under `$CASE/outputs/review-evidence.md`. Compute the SHA-256 of the frozen baseline file (`BASELINE_SHA=$(python3 -c 'import hashlib,json,pathlib; c=pathlib.Path("'"$CASE"'"); s=json.loads((c/"spec.json").read_text()); print(hashlib.sha256((c/s["baseline"]).read_bytes()).hexdigest())')`), generate the current UTC timestamp (`NOW_UTC=$(python3 -c 'from datetime import datetime,timezone; print(datetime.now(timezone.utc).isoformat())')` — **must be $\ge$ `frozen_at`**), and write `$CASE/outputs/observations.json`:
 ```json
 {
   "baseline_sha256": "<64-hex-sha256-of-frozen-baseline-file>",
-  "observed_at": "2026-01-01T00:00:00+00:00",
+  "observed_at": "<current-utc-iso8601-timestamp-after-freeze>",
   "rows": [
     {
       "id": "behavior-verified",
@@ -218,8 +218,8 @@ python3 "$DL/scripts/controller.py" review \
   ```
 - Repeat Steps 3–6 for subsequent staged packages in `$WORK_REPO`. Once all packages pass:
   ```bash
-  # Verify every commit carries a valid supervised-round trailer and fast-forward merge into TARGET_REPO
-  python3 "$DL/scripts/worktree.py" integrate --repo "$TARGET_REPO" --worktree "$WORK_REPO"
+  # Verify every commit carries a valid supervised-round trailer + matches sealed candidate.json, then fast-forward merge
+  python3 "$DL/scripts/worktree.py" integrate --repo "$TARGET_REPO" --worktree "$WORK_REPO" --state-dir "$STATE"
   python3 "$DL/scripts/summary.py" --repo "$TARGET_REPO" --from <first_new_commit> --to HEAD
   python3 "$DL/scripts/worktree.py" cleanup --repo "$TARGET_REPO" --worktree "$WORK_REPO" --delete-branch --lock-file "$STATE/LOCK"
   ```

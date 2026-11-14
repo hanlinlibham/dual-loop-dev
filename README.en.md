@@ -125,7 +125,7 @@ Once validated, run `dual-loop roadmap run --roadmap ../roadmap-state/roadmap.js
    ```bash
    dual-loop roadmap run --roadmap roadmap.json --state-dir ../roadmap-state
    dual-loop roadmap daemon --roadmap roadmap.json --state-dir ../roadmap-state --poll-interval 15
-   dual-loop worktree integrate --repo . --worktree <isolated_worktree_path>
+   dual-loop worktree integrate --repo . --worktree <isolated_worktree_path> --state-dir ../roadmap-state
    ```
 2. **Single-Task Automated Outer-Loop Orchestrator**:
    ```bash

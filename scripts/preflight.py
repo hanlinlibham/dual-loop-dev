@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -25,9 +26,19 @@ def run_cmd(cmd: list[str], cwd: Path | None = None) -> str:
         return f"<error: {exc}>"
 
 
+def _load_controller_module(controller: Path):
+    spec = importlib.util.spec_from_file_location("dual_loop_preflight_ctrl", controller)
+    if spec is None or spec.loader is None:
+        return None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def find_active_rounds(workspace: Path, controller: Path) -> list[dict[str, str]]:
     found: list[dict[str, str]] = []
     seen: set[Path] = set()
+    ctrl_mod = _load_controller_module(controller)
     for state_file in sorted(workspace.rglob("state.json")):
         parts = state_file.parts
         if any(p in {".git", "node_modules", ".venv", "venv"} for p in parts):
@@ -36,9 +47,13 @@ def find_active_rounds(workspace: Path, controller: Path) -> list[dict[str, str]
         if control_root in seen or not (control_root / "events.jsonl").is_file():
             continue
         seen.add(control_root)
-        out = run_cmd([sys.executable, str(controller), "status", "--root", str(control_root)])
         try:
-            phase = json.loads(out).get("phase", "unknown")
+            if ctrl_mod is not None:
+                state, _, _ = ctrl_mod.read_state(control_root)
+                phase = state.get("phase", "unknown")
+            else:
+                out = run_cmd([sys.executable, str(controller), "status", "--root", str(control_root)])
+                phase = json.loads(out).get("phase", "unknown")
         except Exception:
             phase = "unknown"
         if phase in {"issued", "running", "awaiting_review", "unknown"}:

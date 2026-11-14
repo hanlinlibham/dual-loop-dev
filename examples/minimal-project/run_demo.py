@@ -276,14 +276,26 @@ def main() -> int:
         # Primary checkout was untouched while isolated worktree advanced!
         assert git(repo, "rev-parse", "HEAD") == initial_head
 
-        print("\n==> 2. Integrating reviewed commits from isolated worktree into primary branch...")
+        print("\n==> 2. Integrating reviewed commits from isolated worktree into primary branch (verifying ledger & candidate trees)...")
         wt_path = summary["execution_repo"]
         integ = subprocess.run(
-            [sys.executable, str(SCRIPTS / "worktree.py"), "integrate", "--repo", str(repo), "--worktree", wt_path],
+            [
+                sys.executable,
+                str(SCRIPTS / "worktree.py"),
+                "integrate",
+                "--repo",
+                str(repo),
+                "--worktree",
+                wt_path,
+                "--state-dir",
+                str(state_dir),
+            ],
             capture_output=True,
             text=True,
             check=True,
         )
+        integ_data = json.loads(integ.stdout)
+        assert integ_data["ledger_verified"] is True, integ_data
         print(integ.stdout.strip())
 
         print("\n==> 3. Generating deterministic Git audit summary...")

@@ -405,6 +405,60 @@ class ControllerTests(unittest.TestCase):
         shutil.rmtree(case2)
         self.policy.unlink()
         self.call("status")
+        self.call("status", "--full-replay")
+
+    def test_bytecode_suppression_env_override_and_full_replay_cache(self) -> None:
+        # Repository intentionally has NO .gitignore; importing a module in check must not create __pycache__/
+        (self.repo / "helper_mod.py").write_text("FLAG = 7\n", encoding="utf-8")
+        self.git("add", "helper_mod.py")
+        self.git("commit", "-qm", "Add helper module without .gitignore")
+
+        manifest, case = self.manifest(
+            command=[
+                sys.executable,
+                "-c",
+                "import os, helper_mod; assert helper_mod.FLAG == 7 and os.environ.get('CUSTOM_CHECK_FLAG') == 'enabled'",
+            ]
+        )
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        # Non-string env values must be rejected at issue
+        data["checks"][0]["env"] = {"CUSTOM_CHECK_FLAG": 123}
+        manifest.write_text(json.dumps(data), encoding="utf-8")
+        self.call("issue", "--manifest", manifest, role="supervisor", code=2)
+
+        data["checks"][0]["env"] = {"CUSTOM_CHECK_FLAG": "enabled"}
+        manifest.write_text(json.dumps(data), encoding="utf-8")
+        self.call("issue", "--manifest", manifest, role="supervisor")
+
+        clean_env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPYCACHEPREFIX", "PYTHONDONTWRITEBYTECODE")}
+        exec_res = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "execute",
+                "--root",
+                str(self.control),
+                "--token",
+                str(self.authority / "executor.key"),
+            ],
+            capture_output=True,
+            text=True,
+            env=clean_env,
+            check=False,
+        )
+        self.assertEqual(exec_res.returncode, 0, exec_res.stdout + exec_res.stderr)
+        self.assertFalse((self.repo / "__pycache__").exists())
+
+        rep = self.report(case)
+        self.accept(rep)
+        self.call("status")
+        self.assertTrue((self.control / ".verified-cache.json").is_file())
+        self.call("status", "--full-replay")
+
+        # Tampering with archived review.json must still be caught immediately even when .verified-cache.json exists
+        rev_path = self.control / "rounds/001/review.json"
+        rev_path.write_text(rev_path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+        self.call("status", code=2)
 
 
 @unittest.skipUnless(

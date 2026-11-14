@@ -216,13 +216,20 @@ def run_check(check: dict, cwd: Path, log) -> dict[str, object]:
     def cleanup_error(operation: str, exc: BaseException) -> None:
         cleanup_errors.append({"operation": operation, "error": str(exc), "errno": getattr(exc, "errno", None)})
 
+    pycache_dir = tempfile.mkdtemp(prefix="dual-loop-pycache-")
     try:
         for signum in (signal.SIGINT, signal.SIGTERM):
             old_handlers[signum] = signal.signal(signum, cancel)
         deadline = time.monotonic() + check.get("timeout", 300)
+        check_env = os.environ.copy()
+        check_env["PYTHONDONTWRITEBYTECODE"] = "1"
+        check_env.setdefault("PYTHONPYCACHEPREFIX", pycache_dir)
+        if isinstance(check.get("env"), dict):
+            check_env.update({str(k): str(v) for k, v in check["env"].items()})
         process = subprocess.Popen(
             check["argv"],
             cwd=cwd,
+            env=check_env,
             stdout=log,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
@@ -265,6 +272,7 @@ def run_check(check: dict, cwd: Path, log) -> dict[str, object]:
                     process.wait(timeout=1)
                 except (OSError, subprocess.TimeoutExpired) as final_exc:
                     cleanup_error("kill-and-reap-parent", final_exc)
+        shutil.rmtree(pycache_dir, ignore_errors=True)
         for signum, handler in old_handlers.items():
             signal.signal(signum, handler)
 
@@ -297,7 +305,29 @@ def locked(root: Path):
         yield
 
 
-def read_state(root: Path) -> tuple[dict, str, int]:
+def _load_verified_seals(root: Path) -> set[str]:
+    cache_file = root / ".verified-cache.json"
+    if not cache_file.is_file():
+        return set()
+    try:
+        raw = json.loads(cache_file.read_text(encoding="utf-8"))
+        if isinstance(raw, list) and all(isinstance(x, str) for x in raw):
+            return set(raw)
+    except Exception:
+        pass
+    return set()
+
+
+def _save_verified_seals(root: Path, seals: set[str]) -> None:
+    try:
+        tmp = root / ".verified-cache.json.tmp"
+        tmp.write_text(json.dumps(sorted(seals)) + "\n", encoding="utf-8")
+        os.replace(tmp, root / ".verified-cache.json")
+    except OSError:
+        pass
+
+
+def read_state(root: Path, *, full_replay: bool = False) -> tuple[dict, str, int]:
     state = load(root / "state.json")
     previous = None
     last = None
@@ -312,9 +342,14 @@ def read_state(root: Path) -> tuple[dict, str, int]:
             previous = event["hash"]
             last = event
     require(last is not None and last["state"] == state, "state does not match audit ledger")
+    verified_seals = set() if full_replay else _load_verified_seals(root)
+    cache_updated = False
     for round_ in state["rounds"]:
         for rel, expected in round_["artifacts"].items():
             require(file_hash(contained(root, rel)) == expected, f"round artifact changed: {rel}")
+        seal = digest({"directory": round_["directory"], "artifacts": round_["artifacts"]})
+        if seal in verified_seals:
+            continue
         directory = root / round_["directory"]
         archived_script = archived_contract_script(directory)
         archived_case = directory / "contract"
@@ -325,6 +360,10 @@ def read_state(root: Path) -> tuple[dict, str, int]:
             if report:
                 replayed = invoke_contract(archived_script, "replay", archived_case, "--report", report)
                 require(replayed.returncode in (0, 1), "archived review evidence failed replay")
+        verified_seals.add(seal)
+        cache_updated = True
+    if cache_updated and not full_replay:
+        _save_verified_seals(root, verified_seals)
     return state, str(previous), int(last["seq"])
 
 
@@ -448,6 +487,12 @@ def prepare_round(root: Path, state: dict, manifest_file: Path, reason: str) -> 
             isinstance(check.get("timeout", 300), int) and 1 <= check.get("timeout", 300) <= 3600,
             "invalid check timeout",
         )
+        if "env" in check:
+            require(
+                isinstance(check["env"], dict)
+                and all(isinstance(k, str) and bool(k) and isinstance(v, str) for k, v in check["env"].items()),
+                "check env must be a string-to-string object",
+            )
 
     validated = invoke_contract(script, "check", case)
     require(validated.returncode == 0, "contract is not frozen/valid: " + validated.stderr.strip())
@@ -703,6 +748,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--report", help="case-relative comparison report JSON")
     parser.add_argument("--from-review", help="sha256 of the previous rejecting review")
     parser.add_argument("--change-reason", help="explicit reason for recycling into a new round")
+    parser.add_argument(
+        "--full-replay",
+        action="store_true",
+        help="force cold subprocess verification of all archived rounds",
+    )
     args = parser.parse_args(argv)
 
     raw_root = args.root if args.root.is_absolute() else (Path.cwd() / args.root)
@@ -740,7 +790,7 @@ def main(argv: list[str] | None = None) -> int:
             }
             record(root, state, "supervisor", "init")
         else:
-            state, previous, seq = read_state(root)
+            state, previous, seq = read_state(root, full_replay=args.full_replay)
             if args.action == "status":
                 if state["phase"] in ("issued", "awaiting_review"):
                     _, _, manifest, baseline = active_inputs(root, state)

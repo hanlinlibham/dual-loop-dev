@@ -352,6 +352,103 @@ def issue_scoped_worker_token(authority_dir: Path, worker_tokens_dir: Path, role
     return target
 
 
+def _matches_scope(path: str, patterns: list[str]) -> bool:
+    return any(path == p.rstrip("/") or (p.endswith("/") and path.startswith(p)) for p in patterns)
+
+
+def _worktree_dirty_paths(repo: Path) -> list[str]:
+    tracked = {
+        os.fsdecode(x)
+        for x in subprocess.run(
+            ["git", "-C", str(repo), "diff", "--name-only", "HEAD", "-z"],
+            capture_output=True,
+            check=True,
+        ).stdout.split(b"\0")
+        if x
+    }
+    untracked = {
+        os.fsdecode(x)
+        for x in subprocess.run(
+            ["git", "-C", str(repo), "ls-files", "--others", "--exclude-standard", "-z"],
+            capture_output=True,
+            check=True,
+        ).stdout.split(b"\0")
+        if x
+    }
+    return sorted(tracked | untracked)
+
+
+def archive_and_revert_unauthorized_changes(
+    repo: Path,
+    *,
+    profile_path: Path,
+    allowed_paths: list[str],
+    protected_paths: list[str],
+    archive_dir: Path,
+) -> list[str]:
+    profile_data = load_json(profile_path)
+    protected_all = [*profile_data.get("protected_paths", []), *protected_paths]
+    dirty = _worktree_dirty_paths(repo)
+    unauthorized = [
+        p for p in dirty if _matches_scope(p, protected_all) or not _matches_scope(p, allowed_paths)
+    ]
+    if not unauthorized:
+        return []
+
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    save_json(
+        archive_dir / "reverted.json",
+        {"reverted_at": now_iso(), "paths": unauthorized},
+    )
+    diff_proc = subprocess.run(
+        ["git", "-C", str(repo), "diff", "HEAD", "--binary", "--", *unauthorized],
+        capture_output=True,
+        check=False,
+    )
+    (archive_dir / "unauthorized.patch").write_bytes(diff_proc.stdout)
+    for rel in unauthorized:
+        src = repo / rel
+        dst = archive_dir / "files" / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if src.is_symlink():
+            if dst.exists() or dst.is_symlink():
+                dst.unlink()
+            os.symlink(os.readlink(src), dst)
+        elif src.is_file():
+            shutil.copy2(src, dst)
+
+    for rel in unauthorized:
+        in_head = (
+            subprocess.run(
+                ["git", "-C", str(repo), "cat-file", "-e", f"HEAD:{rel}"],
+                capture_output=True,
+                check=False,
+            ).returncode
+            == 0
+        )
+        if in_head:
+            git(repo, "checkout", "HEAD", "--", rel)
+        else:
+            subprocess.run(
+                ["git", "-C", str(repo), "reset", "-q", "HEAD", "--", rel],
+                capture_output=True,
+                check=False,
+            )
+            target = repo / rel
+            if target.is_symlink() or target.is_file():
+                target.unlink()
+            elif target.is_dir():
+                shutil.rmtree(target)
+            parent = target.parent
+            while parent != repo and repo in parent.parents:
+                try:
+                    parent.rmdir()
+                except OSError:
+                    break
+                parent = parent.parent
+    return unauthorized
+
+
 def parse_rejection_attribution(feedback_path: Path) -> str:
     if not feedback_path.is_file():
         return "code"
@@ -521,6 +618,14 @@ def orchestrate_task(
                     for k in ("allowed_paths", "protected_paths", "checks", "criteria"):
                         if k in patch_data:
                             task[k] = patch_data[k]
+
+                archive_and_revert_unauthorized_changes(
+                    repo,
+                    profile_path=Path(task["profile"]).resolve(),
+                    allowed_paths=task["allowed_paths"],
+                    protected_paths=task.get("protected_paths", []),
+                    archive_dir=state_dir / "reverted-out-of-scope" / f"before-r{next_round:03d}",
+                )
 
             save_json(state_dir / "active-task.json", task)
             case_root = cases_dir / f"round-{next_round:03d}"

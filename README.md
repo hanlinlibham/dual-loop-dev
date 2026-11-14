@@ -185,8 +185,8 @@ dual-loop roadmap daemon --roadmap roadmap.json --state-dir ../roadmap-run --pol
 # 查看实时状态与生成的 progress.md 看板
 dual-loop roadmap status --state-dir ../roadmap-run
 
-# 全部验收后，校验每笔提交的审阅尾注并快进合入主分支
-dual-loop worktree integrate --repo . --worktree <execution_repo_path>
+# 全部验收后，交叉校验提交尾注、哈希链账本与封存 candidate.json 后快进合入主分支
+dual-loop worktree integrate --repo . --worktree <execution_repo_path> --state-dir ../roadmap-run
 ```
 
 ### 4. 模式三：底层状态机逐步精确控制（`dual-loop controller`）

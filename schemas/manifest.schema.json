@@ -87,6 +87,12 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 3600
+          },
+          "env": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
           }
         },
         "additionalProperties": false
