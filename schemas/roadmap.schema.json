@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/hanlinlibham/dual-loop-dev/schemas/roadmap-v1.json",
+  "title": "Dual-Loop Unattended Roadmap Queue",
+  "description": "DAG task queue specification for unattended multi-task execution in an isolated Git worktree.",
+  "type": "object",
+  "required": ["name", "repo", "profile", "policy_files", "tasks"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "repo": {
+      "type": "string",
+      "description": "Absolute path to primary Git repository."
+    },
+    "profile": {
+      "type": "string",
+      "description": "Absolute or repo-relative path to profile.json."
+    },
+    "policy_files": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      }
+    },
+    "isolate_worktree": {
+      "type": "boolean",
+      "default": true
+    },
+    "port_range": {
+      "type": "string",
+      "pattern": "^[0-9]+-[0-9]+$"
+    },
+    "auto_integrate": {
+      "type": "boolean",
+      "default": false
+    },
+    "continue_independent_on_failure": {
+      "type": "boolean",
+      "default": false
+    },
+    "default_max_rounds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 20,
+      "default": 3
+    },
+    "executor_backend": {
+      "type": "object"
+    },
+    "reviewer_backend": {
+      "type": "object"
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "allowed_paths", "checks", "criteria"],
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "tier": { "enum": ["L1", "L2", "L3"] },
+          "depends_on": { "type": "array", "items": { "type": "string" } },
+          "allowed_paths": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+          "protected_paths": { "type": "array", "items": { "type": "string" } },
+          "checks": { "type": "array", "minItems": 1 },
+          "criteria": { "type": "array", "minItems": 1 },
+          "max_rounds": { "type": "integer", "minimum": 1, "maximum": 20 },
+          "commit_message": { "type": "string" },
+          "brief": { "type": "string" }
+        }
+      }
+    }
+  }
+}

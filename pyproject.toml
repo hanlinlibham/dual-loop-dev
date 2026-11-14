@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dual-loop-dev"
+version = "0.1.0"
+description = "Dual-loop supervised automated development framework for AI coding agents: single-attempt inner execution, independent adversarial review, budgeted recycling, and unattended worktree roadmap orchestration."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+  { name = "hanlinlibham" }
+]
+keywords = [
+  "ai-agents",
+  "coding-agent",
+  "supervised-development",
+  "dual-loop",
+  "code-review",
+  "claude-code",
+  "codex",
+  "cursor",
+  "agent-skill",
+  "automation"
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Quality Assurance",
+  "Topic :: Software Development :: Testing"
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/hanlinlibham/dual-loop-dev"
+Repository = "https://github.com/hanlinlibham/dual-loop-dev"
+Issues = "https://github.com/hanlinlibham/dual-loop-dev/issues"
+
+[project.scripts]
+dual-loop = "dual_loop.cli:main"
+
+[tool.setuptools]
+packages = ["dual_loop"]
+include-package-data = true
+
+[tool.setuptools.data-files]
+"share/dual-loop-dev/scripts" = [
+  "scripts/contract.py",
+  "scripts/controller.py",
+  "scripts/worktree.py",
+  "scripts/orchestrator.py",
+  "scripts/roadmap.py",
+  "scripts/preflight.py",
+  "scripts/summary.py"
+]
