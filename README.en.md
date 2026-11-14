@@ -59,6 +59,53 @@ git clone https://github.com/hanlinlibham/dual-loop-dev.git ~/.agents/skills/dua
 
 ---
 
+## Prompt Templates for Continuous Iterative Delivery in a New Codebase
+
+Copy and paste either prompt into your primary coding agent (Claude Code, Cursor, Codex, or Antigravity) when entering a **brand-new repository** to drive disciplined, multi-round optimization and delivery:
+
+### Template A: Interactive Supervisor Mode (Recommended for End-to-End Iterative Optimization)
+
+```markdown
+Use the `dual-loop-dev` skill and act as the outer-loop Supervisor to continuously iterate on and deliver [<YOUR OBJECTIVE, e.g., parser performance optimization / module decoupling / auth boundary hardening>] in this repository:
+
+1. **Read-Only Discovery & Baseline Setup**:
+   - Run `preflight.py` first. Inspect the architecture, existing test/build commands, and `.gitignore` (ensure build artifacts and `__pycache__/` are git-ignored so validation checks never pollute source snapshots).
+   - If `profile.json` does not exist yet, identify critical paths that must remain untouched and create `profile.json` (`"require_clean_worktree": true`).
+   - Measure and record the current baseline (test status, benchmark numbers, or reproduction evidence) before planning any edits.
+
+2. **Staged Roadmap Decomposition**:
+   - Break the objective into 2–5 small, independently verifiable work packages. Assign each package a tier (`L1/L2/L3`), an explicit `allowed_paths` allowlist, deterministic `checks`, measurable `expected.csv` criteria, and a clear overall stop rule.
+
+3. **Isolated Worktree & Dual-Loop Execution per Package**:
+   - Create an external Git worktree (and leased port if needed) via `worktree.py create`; do not edit the primary branch directly.
+   - For each package: freeze the contract (zero unresolved `investigate` rows) -> `issue` -> dispatch an inner Executor subagent to implement within `allowed_paths` and call `execute` at most once -> dispatch a **fresh-context** cold Reviewer subagent to re-run checks, cold-read the diff, and run `/tmp` mutation/counterexample probes.
+   - If rejected, classify root cause (`ATTRIBUTION: code | contract | environment`) and `recycle` using `review_hash` within `max_rounds=3` without weakening tests.
+
+4. **Trailer-Verified Integration & Audited Delivery**:
+   - After each `accept`, commit locally in the isolated worktree with the `Accepted in supervised round <case> (review <hash8>)` trailer and proceed to the next package.
+   - Once all packages meet the stop rule, run `worktree.py integrate` to verify trailers and fast-forward merge (or keep the branch ready for inspection), compute final stats with `summary.py`, and report before/after metrics. Do not `git push` or restart production services without explicit confirmation.
+```
+
+### Template B: Unattended Roadmap / Nightly Daemon Mode
+
+```markdown
+Use the `dual-loop-dev` skill to inspect this repository read-only, create `profile.json` if missing, and decompose [<YOUR SPEC OR ROADMAP>] into a multi-task DAG file at `../roadmap-state/roadmap.json` conforming to `schemas/roadmap.schema.json` (`"isolate_worktree": true`, explicit `allowed_paths`, `checks`, `criteria`, and `depends_on`, using `<claude or codex>` backends).
+
+Once validated, run `dual-loop roadmap run --roadmap ../roadmap-state/roadmap.json --state-dir ../roadmap-state` (or `daemon` mode), and report the generated `progress.md` summary and isolated branch status when finished.
+```
+
+---
+
+## How `dual-loop-dev` Differs from Ordinary Skills & Connects with TaskKit
+
+| Dimension | Ordinary Agent Skill (`SKILL.md` only) | `dual-loop-dev` (This Framework) | Macro Workspace Harness (e.g., [TaskKit](https://github.com/abuttoncc/agent-taskkit)) |
+|---|---|---|---|
+| **Enforcement** | **Soft prompt guidance**: relies on LLM compliance; prone to silent retries, weakened assertions, and self-approval in long sessions | **Hard cryptographic & state-machine gates**: separated `0600` role keys, pre/post-check SHA-256 `candidate.json` sealing, and hash-chained `events.jsonl` | **Handoff & lifecycle order**: cross-session task folders, `handoffs/` checkpoints, and frozen deliverable protection |
+| **Execution Model** | Passive instructions inside a chat session | **Dual-mode**: works both as an in-session Skill AND as an outer CLI orchestrator/daemon dispatching `claude` / `codex` workers | Workspace-level task tracking & milestone indexing |
+| **Interoperability** | Domain skills (framework specs, UI rules) plug into `profile.json` `docs` and `policy_files` to be hash-frozen and audited by the cold Reviewer | Governs the inner/outer code-change loop, Git worktree isolation, and adversarial verification | Shares the exact `spec.json` + `expected.csv` contract protocol—use TaskKit for macro project handoffs and `dual-loop-dev` for supervised code execution |
+
+---
+
 ## Usage Modes
 
 1. **Unattended Multi-Task Roadmap Runner / Daemon**:

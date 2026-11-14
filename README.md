@@ -82,9 +82,54 @@ git clone https://github.com/hanlinlibham/dual-loop-dev.git ~/.agents/skills/dua
 # 若使用 Claude Code，同样可放入 ~/.claude/skills/dual-loop-dev
 ```
 
-安装后可直接对你的 Agent 说：
+安装后即可在任意新代码库中通过提示词驱动完整受监督迭代闭环（见下方模板）。
 
-> 请使用 `dual-loop-dev` 技能，先对当前仓库跑一遍占用预检和基线诊断，按风险分期后在隔离 worktree 里用双层循环推进这项重构。
+---
+
+## 在新代码库启动持续迭代优化与交付（提示词模板）
+
+当你进入一个**全新的代码库**，希望 Agent 围绕某个目标持续拆解、迭代优化、独立验收并干净交付时，可直接复制以下提示词发送给你的主 Agent（Claude Code / Cursor / Codex / Antigravity）：
+
+### 模板 A：主会话架构师总控模式（最常用，适合边诊断边多轮推进）
+
+```markdown
+请启用 `dual-loop-dev` 技能，作为外层 Supervisor 对当前仓库执行【<在此填写你的目标，例如：核心解析链路性能优化 / 模块解耦重构 / 补齐鉴权与边界防御>】的持续迭代优化与交付，严格遵守以下流程：
+
+1. **只读摸底与基线建档**：
+   - 先运行 `preflight.py` 检查仓库与工作区占用；只读梳理模块边界、现有测试/构建命令与 `.gitignore`（确保构建缓存与 `__pycache__/` 已被忽略，避免检查命令污染源码快照）。
+   - 若仓库尚无 `profile.json`，先识别不可误碰的核心目录/配置并生成 `profile.json`（设置 `"require_clean_worktree": true`）。
+   - 先实测并记录当前基线数据（现有测试通过率、性能指标或缺陷复现证据），禁止未诊断直接改代码。
+
+2. **分期拆解路线图**：
+   - 将目标拆解为 2~5 个可独立验证、小步快跑的迭代工作包，明确每个包的档位（`L1/L2/L3`）、白名单 `allowed_paths`、自动化检查命令与可量化验收标准（`expected.csv`），给出整件事情的明确停止条件（Stop Rule）。
+
+3. **隔离 Worktree 与双层循环逐包迭代**：
+   - 使用 `worktree.py create` 在仓外创建独立 Git Worktree（及隔离端口），严禁在主分支直接裸改。
+   - 对每个工作包严格执行：冻结证据合同（无 `investigate` 悬而未决项）→ 签发 `issue` → 派发内层 Executor 子代理在白名单内单次实现并只跑一次 `execute` → 派发**全新上下文**的冷 Reviewer 子代理独立复跑检查、冷读 Diff 并在 `/tmp` 副本上做反向变异探针验证。
+   - 若某轮被 `reject`，先明确归因（`ATTRIBUTION: code | contract | environment`），在单包 `max_rounds=3` 预算内凭 `review_hash` 执行 `recycle` 迭代修复；预算耗尽仍未过则停机汇报，禁止静默改弱测试标准。
+
+4. **尾注合流与实算交付**：
+   - 每个工作包 `accept` 后，在隔离 Worktree 内创建带 `Accepted in supervised round <case> (review <hash8>)` 审计尾注的本地提交，进入下一包迭代直至满足总停止条件。
+   - 全部完成后，用 `worktree.py integrate` 校验尾注合入目标分支（或保留隔离分支待检），运行 `summary.py` 实算提交数与改动统计，输出基线对比与交付总结。未经我明确确认，不要执行 `git push` 或重启生产服务。
+```
+
+### 模板 B：夜间/后台无人值守守护模式（适合长任务队列自动挂机）
+
+```markdown
+请启用 `dual-loop-dev` 技能，先只读摸底当前仓库并生成 `profile.json`；然后将【<在此填写复杂需求或路线图文档路径>】拆解为一份符合 `schemas/roadmap.schema.json` 的多任务 DAG 配置文件 `../roadmap-state/roadmap.json`（开启 `"isolate_worktree": true`，配置好每项任务的 `allowed_paths`、`checks`、`criteria` 与 `depends_on` 依赖关系，后端使用 `<claude 或 codex>`）。
+
+生成并校验通过后，运行 `dual-loop roadmap run --roadmap ../roadmap-state/roadmap.json --state-dir ../roadmap-state`（或 `daemon` 模式）自动推进队列，完成后向我汇报 `progress.md` 看板结果与待合入分支状态。
+```
+
+---
+
+## 与普通 Skill 及相关工具的区别与联动
+
+| 维度 | 普通编码 Skill（纯提示词规范） | `dual-loop-dev`（本框架） | 宏观任务管理（如 [TaskKit / `task-harness`](https://github.com/abuttoncc/agent-taskkit)） |
+|---|---|---|---|
+| **约束强度** | **软约束**：依赖大模型自觉遵守 Prompt，长对话易遗忘、易改弱测试或自审自批 | **硬门禁**：Python 状态机 + `0600` 三角色密钥 + 检查前后源码 SHA-256 封存 + 哈希链账本 | **交接门禁**：聚焦跨会话/跨天任务建档、`handoffs/` 快照与已交付文档防原位覆写 |
+| **运行形态** | 仅在对话内被动提供参考指令 | **双模合一**：既可当会话内 Skill，也可由 CLI（`orchestrate` / `roadmap daemon`）在宿主机主动调度多个子 Agent | 工作区级任务目录与里程碑索引管理 |
+| **协同方式** | 可作为领域知识（如框架开发规范、UI 规范）写入 `profile.json` 的 `docs` 与每轮 `policy_files`，由本框架冻结归档并交冷 Reviewer 逐条核验 | 负责「代码修改这一步」的微观受监督闭环、Worktree 隔离与防回归对抗审阅 | 与本框架共享完全一致的 `spec.json` + `expected.csv` 证据合同协议：可用 TaskKit 管理顶层项目需求与交接，用 `dual-loop-dev` 驱动底层代码迭代并将 `review-comparison.json` 挂入最终交付证据 |
 
 ---
 
