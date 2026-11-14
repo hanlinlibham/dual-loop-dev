@@ -1,6 +1,6 @@
 # Dual-Loop Dev (`dual-loop-dev`)
 
-[中文主文档](README.md) · [Architecture & Boundaries](references/architecture.md) · [Workflow Tiers](references/workflow-tiers.md) · [Failure Casebook](references/failure-casebook.md)
+[中文主文档](README.md) · [**🤖 Cloud/Local AI Agent Playbook (`AGENTS.md`)**](AGENTS.md) · [`SKILL.md`](SKILL.md) · [Architecture & Boundaries](references/architecture.md) · [Workflow Tiers](references/workflow-tiers.md) · [Failure Casebook](references/failure-casebook.md)
 
 **A dual-loop supervised automated development framework and universal Agent Skill for AI coding agents.**
 
@@ -8,6 +8,9 @@ Single-loop coding agents ("edit -> run tests -> weaken assertions or hack aroun
 
 1. **Inner Execution Loop (`executor`)**: Receives a frozen contract and an allowlist of writable paths, implements the change in one pass, and runs `execute` **at most once**. Failed checks never authorize silent self-repair or retries.
 2. **Outer Governance Loop (`supervisor` + cold `reviewer`)**: Freezes contracts and baselines, dispatches a fresh independent reviewer to cold-read diffs and run `/tmp` mutation probes, attributes rejections (`code` vs. `contract` vs. `environment`), recycles within a monotonically non-increasing round budget, and orchestrates multi-task DAG roadmaps inside isolated Git worktrees.
+
+> **🤖 For Cloud & Remote AI Agents Reading This Repository Directly** (Codex Cloud, Claude Code Web, Cursor Background Agent, Devin, Antigravity):  
+> Read [**`AGENTS.md`**](AGENTS.md) (and [`SKILL.md`](SKILL.md)) first. No `pip install` or PyPI access is required—clone this repo outside the target codebase (e.g. `/tmp/dual-loop-dev`) and follow the step-by-step CLI commands and minimal valid JSON payloads in `AGENTS.md`.
 
 ---
 
@@ -20,7 +23,7 @@ Single-loop coding agents ("edit -> run tests -> weaken assertions or hack aroun
 - **Automated Subagent Orchestrator & Unattended Roadmap Daemon**:
   - `orchestrator.py` dispatches `claude`, `codex`, or any custom command backend with scoped per-round worker tokens, auto-submits unexecuted candidates if an executor forgets to call `execute`, safely retries interrupted read-only reviewers, and routes `code / contract / environment` rejections.
   - `roadmap.py` runs multi-task DAG queues (`run` or `daemon` mode with `flock` PID lock and heartbeats) inside isolated Git worktrees + leased TCP ports, maintaining a live `progress.md` board and trailer-verified branch integration.
-- **Universal Agent Skill (`SKILL.md`)**: Ready to drop into `~/.agents/skills/dual-loop-dev` or `~/.claude/skills/dual-loop-dev` for Claude Code, Cursor, Codex, and Antigravity.
+- **Universal Agent Skill (`SKILL.md` + `AGENTS.md`)**: Ready to drop into `~/.agents/skills/dual-loop-dev` or bootstrap on the fly inside ephemeral cloud sandboxes.
 
 ---
 
@@ -61,9 +64,19 @@ git clone https://github.com/hanlinlibham/dual-loop-dev.git ~/.agents/skills/dua
 
 ## Prompt Templates for Continuous Iterative Delivery in a New Codebase
 
-Copy and paste either prompt into your primary coding agent (Claude Code, Cursor, Codex, or Antigravity) when entering a **brand-new repository** to drive disciplined, multi-round optimization and delivery:
+Copy and paste any prompt below into your coding agent when entering a **brand-new repository** to drive disciplined, multi-round optimization and delivery:
 
-### Template A: Interactive Supervisor Mode (Recommended for End-to-End Iterative Optimization)
+### Cloud / Ephemeral Sandbox Mode (Zero Pre-Install — Just Paste the Repo URL)
+
+```markdown
+Clone or read https://github.com/hanlinlibham/dual-loop-dev outside this repository (e.g. `/tmp/dual-loop-dev`) and follow its root `AGENTS.md` and `SKILL.md` instructions to continuously iterate on and deliver [<YOUR OBJECTIVE>] in the current codebase:
+1. Run read-only discovery (`preflight.py`, baseline tests/metrics, `.gitignore` cache check, and `profile.json` setup), then decompose the goal into 2–5 small staged packages with a clear stop rule.
+2. Create an external Git worktree via `worktree.py create` and store all control/authority/case directories outside the target repo.
+3. Execute each package through the full `contract.py` + `controller.py` dual loop (frozen contract -> `issue` -> single-attempt `execute` -> fresh cold `review` with `/tmp` counterexample probes -> attributed `recycle` within `max_rounds=3` if rejected -> local commit with `Accepted in supervised round <case> (review <hash8>)` trailer).
+4. Once all packages pass, verify trailers via `worktree.py integrate`, print exact Git stats via `summary.py`, and report before/after metrics without pushing unless asked.
+```
+
+### Template A: Local Interactive Supervisor Mode (When Skill Is Already Installed)
 
 ```markdown
 Use the `dual-loop-dev` skill and act as the outer-loop Supervisor to continuously iterate on and deliver [<YOUR OBJECTIVE, e.g., parser performance optimization / module decoupling / auth boundary hardening>] in this repository:

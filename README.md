@@ -1,12 +1,13 @@
 # Dual-Loop Dev (`dual-loop-dev`)
 
-[English Documentation](README.en.md) · [架构与安全边界](references/architecture.md) · [L1/L2/L3 分档指南](references/workflow-tiers.md) · [真实拦截案例集](references/failure-casebook.md)
+[English Documentation](README.en.md) · [**🤖 云端/本地 AI Agent 自引导手册 (`AGENTS.md`)**](AGENTS.md) · [`SKILL.md`](SKILL.md) · [架构与安全边界](references/architecture.md) · [L1/L2/L3 分档指南](references/workflow-tiers.md) · [真实拦截案例集](references/failure-casebook.md)
 
 **面向 AI 编码智能体的双层循环受监督自动化开发框架。**
 
 `dual-loop-dev` 把单层自动编程中极易失控的「边改边跑测试、红了就改断言凑绿灯、自己宣布完成」拆解为**内层单次受控实现（Executor）**与**外层冻结合同 + 独立冷审阅 + 预算内归因重签（Supervisor + Independent Reviewer）**的双层闭环，并提供**自动 Git Worktree 隔离**与**多任务 DAG 夜间无人值守守护进程**。
 
-A zero-dependency Python 3.10+ framework and universal Agent Skill (`SKILL.md`) for high-reliability automated software engineering. It separates **single-attempt inner execution** from **outer contract freezing, cold adversarial review, budgeted recycling, and isolated Git worktree roadmap orchestration**.
+> **🤖 给直接读取本仓库的云端 / 远程 AI Agent（Codex Cloud · Claude Code Web · Cursor Cloud · Devin · Antigravity）**：  
+> 请直接阅读根目录 [**`AGENTS.md`**](AGENTS.md)（及 [`SKILL.md`](SKILL.md)）。无需 `pip install` 或任何第三方依赖——将本仓库克隆到目标代码库**外部目录**（如 `/tmp/dual-loop-dev`）后，即可对照 `AGENTS.md` 中的完整命令行配方与最小合法 JSON 模板，零猜测跑通全套受监督双层开发闭环。
 
 ---
 
@@ -88,9 +89,21 @@ git clone https://github.com/hanlinlibham/dual-loop-dev.git ~/.agents/skills/dua
 
 ## 在新代码库启动持续迭代优化与交付（提示词模板）
 
-当你进入一个**全新的代码库**，希望 Agent 围绕某个目标持续拆解、迭代优化、独立验收并干净交付时，可直接复制以下提示词发送给你的主 Agent（Claude Code / Cursor / Codex / Antigravity）：
+当你进入一个**全新的代码库**，希望 Agent 围绕某个目标持续拆解、迭代优化、独立验收并干净交付时，按环境直接复制对应提示词即可：
 
-### 模板 A：主会话架构师总控模式（最常用，适合边诊断边多轮推进）
+### 云端 / 临时容器免预装直连模式（无需提前安装 Skill，直接贴仓库链接即可）
+
+适用于 Codex Cloud、Claude Code Web、Cursor Background Agent、Devin 等云端环境——云端 Agent 读取本仓库根目录 [`AGENTS.md`](AGENTS.md) 后会自动完成外部挂载与全流程执行：
+
+```markdown
+请先将 https://github.com/hanlinlibham/dual-loop-dev 克隆到当前仓库外部目录（如 `/tmp/dual-loop-dev`），仔细阅读其根目录下的 `AGENTS.md` 与 `SKILL.md`，然后严格按照里面的双层循环受监督规范，对当前仓库执行【<在此填写你的目标>】的持续迭代优化与交付：
+1. 先跑只读摸底（`preflight.py`、基线测试/指标采集、检查 `.gitignore` 缓存忽略规则、建立 `profile.json`），将目标拆解为 2~5 个小步独立验证的工作包并给出明确停止条件。
+2. 用 `worktree.py create` 在仓外创建隔离 Git Worktree，所有 `control / authority / cases` 状态目录一律放在目标仓库外部。
+3. 对每个工作包执行完整 `contract.py` + `controller.py` 双层闭环（冻结合同 → `issue` → 单次 `execute` 封存候选源码 → 全新冷审阅与 `/tmp` 反向变异探针 → 若驳回先归因再在 `max_rounds=3` 内 `recycle` → 验收后附 `Accepted in supervised round <case> (review <hash8>)` 尾注本地提交）。
+4. 全部达标后，用 `worktree.py integrate` 校验尾注合入目标分支，用 `summary.py` 实算统计并输出前后对比报告；未经明确确认不执行 `git push`。
+```
+
+### 模板 A：本机主会话架构师总控模式（本机已安装 `dual-loop-dev` 技能时最常用）
 
 ```markdown
 请启用 `dual-loop-dev` 技能，作为外层 Supervisor 对当前仓库执行【<在此填写你的目标，例如：核心解析链路性能优化 / 模块解耦重构 / 补齐鉴权与边界防御>】的持续迭代优化与交付，严格遵守以下流程：
@@ -197,6 +210,7 @@ dual-loop controller review --root "$CTRL" --token "$AUTH/reviewer.key" --verdic
 
 | 路径 | 说明 |
 |---|---|
+| [`AGENTS.md`](AGENTS.md) / [`CLAUDE.md`](CLAUDE.md) | 云端与本地 AI Agent 免预装自引导手册（含完整 CLI 配方与最小合法 JSON 模板） |
 | [`SKILL.md`](SKILL.md) | 编码助手技能主入口（选档、预检、三角色工作流） |
 | [`dual_loop/cli.py`](dual_loop/cli.py) | 统一 `dual-loop` CLI 入口分发器 |
 | [`scripts/contract.py`](scripts/contract.py) | 内置零依赖证据合同引擎（兼容 TaskKit v0.5 协议） |
