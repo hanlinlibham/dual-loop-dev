@@ -94,10 +94,11 @@ class OrchestratorAndRoadmapTests(unittest.TestCase):
         self.git("init", "-q")
         self.git("config", "user.email", "orch@example.invalid")
         self.git("config", "user.name", "Orch Fixture")
+        (self.repo / ".gitignore").write_text("__pycache__/\n*.py[cod]\n", encoding="utf-8")
         (self.repo / "feature.py").write_text("ROUND = 0\n", encoding="utf-8")
         (self.repo / "POLICY.md").write_text("Policy v1\n", encoding="utf-8")
         (self.repo / "profile.json").write_text(
-            json.dumps({"schema_version": 1, "name": "svc", "protected_paths": ["POLICY.md", "profile.json"]}),
+            json.dumps({"schema_version": 1, "name": "svc", "protected_paths": [".gitignore", "POLICY.md", "profile.json"]}),
             encoding="utf-8",
         )
         self.git("add", ".")

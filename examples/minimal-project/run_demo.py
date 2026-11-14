@@ -90,7 +90,7 @@ if role == "executor":
 elif role == "reviewer":
     # Independent adversarial probe in process memory (never mutating repo)
     probe = subprocess.run(
-        [sys.executable, "-c", "import sys; sys.path.insert(0, sys.argv[1]); from src.sanitizer import sanitize_label; out = sanitize_label('2026'); assert out and len(out) > 0, 'empty output on numeric label'", str(repo)],
+        [sys.executable, "-B", "-c", "import sys; sys.path.insert(0, sys.argv[1]); from src.sanitizer import sanitize_label; out = sanitize_label('2026'); assert out and len(out) > 0, 'empty output on numeric label'", str(repo)],
         capture_output=True,
         text=True,
     )
@@ -165,6 +165,7 @@ def main() -> int:
         (repo / "core").mkdir(parents=True)
         (repo / "src").mkdir(parents=True)
         (repo / "tests").mkdir(parents=True)
+        (repo / ".gitignore").write_text("__pycache__/\n*.py[cod]\n", encoding="utf-8")
         (repo / "core/kernel.py").write_text("KERNEL_VERSION = '1.0.0'\n", encoding="utf-8")
         (repo / "src/__init__.py").write_text("", encoding="utf-8")
         (repo / "src/sanitizer.py").write_text(
@@ -185,7 +186,7 @@ def main() -> int:
                 {
                     "schema_version": 1,
                     "name": "sample-service",
-                    "protected_paths": ["core/", "POLICY.md", "profile.json"],
+                    "protected_paths": [".gitignore", "core/", "POLICY.md", "profile.json"],
                     "require_clean_worktree": True,
                 },
                 indent=2,
