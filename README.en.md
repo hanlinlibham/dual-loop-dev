@@ -1,41 +1,47 @@
 # Dual-Loop Dev (`dual-loop-dev`)
 
-[中文主文档](README.md) · [**🤖 Cloud/Local AI Agent Playbook (`AGENTS.md`)**](AGENTS.md) · [`SKILL.md`](SKILL.md) · [Architecture & Boundaries](references/architecture.md) · [Workflow Tiers](references/workflow-tiers.md) · [Failure Casebook](references/failure-casebook.md)
+[中文主文档](README.md) · [**📄 Shareable Technical Overview (EN)**](docs/OVERVIEW.en.md) · [**🤖 Cloud/Local AI Agent Playbook (`AGENTS.md`)**](AGENTS.md) · [`SKILL.md`](SKILL.md) · [Architecture & Boundaries](references/architecture.md) · [Workflow Tiers](references/workflow-tiers.md) · [Failure Casebook](references/failure-casebook.md)
 
-**A dual-loop supervised automated development framework and universal Agent Skill for AI coding agents.**
+**A zero-dependency, deterministic supervised development gate and universal Agent Skill for AI coding agents.**
 
-Single-loop coding agents ("edit -> run tests -> weaken assertions or hack around failures -> self-declare success") break down on multi-module refactors and long-horizon roadmaps. `dual-loop-dev` splits automated software engineering into two strictly separated loops and three distinct role identities—powered only by the **Python 3.10+ standard library and Git** (zero third-party dependencies):
+Single-loop coding agents (*"edit -> run tests -> weaken assertions or hack around failures -> self-declare success"*) routinely break down on multi-module refactors and long-horizon roadmaps. Built strictly on the **Python 3.10+ standard library and Git**, `dual-loop-dev` splits automated software engineering into two hard-enforced loops and three cryptographically separated roles:
 
-1. **Inner Execution Loop (`executor`)**: Receives a frozen contract and an allowlist of writable paths, implements the change in one pass, and runs `execute` **at most once**. Failed checks never authorize silent self-repair or retries.
-2. **Outer Governance Loop (`supervisor` + cold `reviewer`)**: Freezes contracts and baselines, dispatches a fresh independent reviewer to cold-read diffs and run `/tmp` mutation probes, attributes rejections (`code` vs. `contract` vs. `environment`), recycles within a monotonically non-increasing round budget, and orchestrates multi-task DAG roadmaps inside isolated Git worktrees.
+1. **Inner Execution Loop (`executor`)**: Receives a frozen prospective contract and an explicit allowlist of writable paths, implements the change in one pass, and runs `execute` **at most once**. Failed checks consume the attempt and seal the candidate—never authorizing silent retries or assertion weakening.
+2. **Outer Governance Loop (`supervisor` + cold `reviewer`)**: Freezes contracts and baselines, dispatches a fresh-context independent reviewer to cold-read diffs and run `/tmp` mutation/counterexample probes, classifies rejections (`code` vs. `contract` vs. `environment`), recycles within a monotonically non-increasing round budget, and orchestrates multi-task DAG roadmaps inside isolated Git worktrees.
 
 > **🤖 For Cloud & Remote AI Agents Reading This Repository Directly** (Codex Cloud, Claude Code Web, Cursor Background Agent, Devin, Antigravity):  
 > Read [**`AGENTS.md`**](AGENTS.md) (and [`SKILL.md`](SKILL.md)) first. No `pip install` or PyPI access is required—clone this repo outside the target codebase (e.g. `/tmp/dual-loop-dev`) and follow the step-by-step CLI commands and minimal valid JSON payloads in `AGENTS.md`.
+>
+> **📢 Sharing with your team or community?** Read and share the standalone [**English Technical Overview & Deep Dive (`docs/OVERVIEW.en.md`)**](docs/OVERVIEW.en.md).
+
+![Dual-Loop Supervised Architecture](docs/assets/architecture-en.svg)
 
 ---
 
 ## Key Capabilities
 
-- **Cryptographically Separated Local Role Tokens**: `supervisor.key`, `executor.key`, and `reviewer.key` (`0600`) prevent role confusion, self-approval, and unauthorized retries.
-- **Immutable Candidate Sealing & Process-Group Check Isolation**: Before check #1 runs, `controller.py` seals a SHA-256 source snapshot (`candidate.json`) and re-verifies it before and after *every* check—validation gates can never silently mutate or auto-format source code. Checks run in isolated POSIX process groups (`start_new_session=True`) so timeouts (`124`) and `SIGINT`/`SIGTERM` cleanly reap descendant processes.
-- **Tamper-Evident Hash Ledger & Offline Replay**: Every transition is recorded in a SHA-256 hash chain (`events.jsonl`), and each `rounds/NNN/` archive stores self-contained copies of contracts, policies, `profile.json`, logs, review evidence, and the contract engine script—verifiable offline even if original inputs are later removed.
-- **Built-in Zero-Dependency Contract Engine + TaskKit Compatibility**: Ships with `scripts/contract.py` (`init-case / freeze / check / compare / replay`) out of the box while remaining drop-in compatible with external [TaskKit](https://github.com/abuttoncc/agent-taskkit) (`taskkit_script`).
-- **Automated Subagent Orchestrator & Unattended Roadmap Daemon**:
-  - `orchestrator.py` dispatches `claude`, `codex`, or any custom command backend with scoped per-round worker tokens, auto-submits unexecuted candidates if an executor forgets to call `execute`, safely retries interrupted read-only reviewers, and routes `code / contract / environment` rejections.
-  - `roadmap.py` runs multi-task DAG queues (`run` or `daemon` mode with `flock` PID lock and heartbeats) inside isolated Git worktrees + leased TCP ports, maintaining a live `progress.md` board and trailer-verified branch integration.
-- **Universal Agent Skill (`SKILL.md` + `AGENTS.md`)**: Ready to drop into `~/.agents/skills/dual-loop-dev` or bootstrap on the fly inside ephemeral cloud sandboxes.
+- **Cryptographically Separated Local Role Tokens**: `supervisor.key`, `executor.key`, and `reviewer.key` (`0600`) physically block self-approval, role confusion, and silent retries.
+- **Immutable Candidate Sealing, Bytecode Isolation & Process-Group Reaping**: Before check #1 runs, `controller.py` seals a SHA-256 source snapshot (`candidate.json`) and re-verifies it before and after *every* check—validation gates can never silently mutate or auto-format source code. Checks run with `PYTHONDONTWRITEBYTECODE=1` and a disposable external `PYTHONPYCACHEPREFIX` inside isolated POSIX process groups (`start_new_session=True`), cleanly reaping descendant processes on timeout (`124`) or `SIGINT`/`SIGTERM`.
+- **Tamper-Evident Hash Ledger & $O(N)$ Offline Replay**: Every transition is `fsync`-recorded in a SHA-256 hash chain (`events.jsonl`), and each `rounds/NNN/` archive stores self-contained copies of contracts, policies, `profile.json`, logs, review evidence, and the contract engine script—verifiable offline with an artifact-seal-keyed replay cache (`.verified-cache.json` + `--full-replay`).
+- **Built-in Zero-Dependency Contract Engine + TaskKit Compatibility**: Ships with `scripts/contract.py` (`init-case / freeze / check / compare / replay`) out of the box while remaining drop-in compatible with external [TaskKit](https://github.com/abuttoncc/agent-taskkit) v0.5 (`taskkit_script`).
+- **Fault-Tolerant Orchestrator & Attribution-Aware Recovery**:
+  - `orchestrator.py` dispatches `claude`, `codex`, or custom command backends using ephemeral per-round worker tokens (`worker-tokens/`), auto-submits forgotten `execute` calls, and losslessly retries interrupted read-only reviewers.
+  - Routes rejections by root cause: preserves candidate code untouched on `ATTRIBUTION: contract` (supporting `contract_repair_command` hot-fixes), and archives + reverts unauthorized out-of-scope edits before `recycle` on `ATTRIBUTION: code`.
+- **Unattended Multi-Task DAG Daemon & Ledger-Verified Integration**:
+  - `roadmap.py` validates DAG topologies (Kahn cycle detection), isolates execution in external Git worktrees + leased TCP ports, snapshots dirty failed worktrees (`uncommitted-snapshot/`) when `continue_independent_on_failure: true`, and maintains a live `progress.md` board.
+  - `worktree.py integrate --state-dir` cross-verifies commit review trailers, hash-chained `accepted` rounds, and Git blob SHA-256 trees against sealed `candidate.json` before merging.
 
 ---
 
 ## 30-Second Quickstart
 
-Run the self-contained 2-task DAG demo (no LLM API keys required—simulates a Round 1 cold-review adversarial rejection despite passing unit tests, automatic Round 2 recycle & acceptance, and trailer-checked Git worktree integration):
+Run the self-contained 2-task DAG demo (no LLM API keys required—simulates a Round 1 cold-review adversarial rejection despite passing unit tests, automatic Round 2 recycle & acceptance, and ledger-verified Git worktree integration):
 
 ```bash
 git clone https://github.com/hanlinlibham/dual-loop-dev.git
 cd dual-loop-dev
 
-# Run the end-to-end demo
+# Run the end-to-end 2-task DAG demo
 python3 examples/minimal-project/run_demo.py
 
 # Run the full adversarial unit & integration test suite
@@ -46,18 +52,21 @@ python3 -m unittest discover -s tests -p "test_*.py" -v
 
 ## Installation
 
-### As a CLI Tool
+### 1. As a CLI Tool
 
 ```bash
 pip install -e .
 dual-loop --help
 ```
 
-### As an Agent Skill
+### 2. As a Universal Agent Skill (Claude Code / Cursor / Codex / Antigravity)
 
 ```bash
 mkdir -p ~/.agents/skills
 git clone https://github.com/hanlinlibham/dual-loop-dev.git ~/.agents/skills/dual-loop-dev
+
+# Optional for Claude Code local skills directory:
+# git clone https://github.com/hanlinlibham/dual-loop-dev.git ~/.claude/skills/dual-loop-dev
 ```
 
 ---
@@ -73,7 +82,7 @@ Clone or read https://github.com/hanlinlibham/dual-loop-dev outside this reposit
 1. Run read-only discovery (`preflight.py`, baseline tests/metrics, `.gitignore` cache check, and `profile.json` setup), then decompose the goal into 2–5 small staged packages with a clear stop rule.
 2. Create an external Git worktree via `worktree.py create` and store all control/authority/case directories outside the target repo.
 3. Execute each package through the full `contract.py` + `controller.py` dual loop (frozen contract -> `issue` -> single-attempt `execute` -> fresh cold `review` with `/tmp` counterexample probes -> attributed `recycle` within `max_rounds=3` if rejected -> local commit with `Accepted in supervised round <case> (review <hash8>)` trailer).
-4. Once all packages pass, verify trailers via `worktree.py integrate`, print exact Git stats via `summary.py`, and report before/after metrics without pushing unless asked.
+4. Once all packages pass, verify trailers and sealed candidate trees via `worktree.py integrate --state-dir`, print exact Git stats via `summary.py`, and report before/after metrics without pushing unless asked.
 ```
 
 ### Template A: Local Interactive Supervisor Mode (When Skill Is Already Installed)
@@ -94,9 +103,9 @@ Use the `dual-loop-dev` skill and act as the outer-loop Supervisor to continuous
    - For each package: freeze the contract (zero unresolved `investigate` rows) -> `issue` -> dispatch an inner Executor subagent to implement within `allowed_paths` and call `execute` at most once -> dispatch a **fresh-context** cold Reviewer subagent to re-run checks, cold-read the diff, and run `/tmp` mutation/counterexample probes.
    - If rejected, classify root cause (`ATTRIBUTION: code | contract | environment`) and `recycle` using `review_hash` within `max_rounds=3` without weakening tests.
 
-4. **Trailer-Verified Integration & Audited Delivery**:
+4. **Ledger-Verified Integration & Audited Delivery**:
    - After each `accept`, commit locally in the isolated worktree with the `Accepted in supervised round <case> (review <hash8>)` trailer and proceed to the next package.
-   - Once all packages meet the stop rule, run `worktree.py integrate` to verify trailers and fast-forward merge (or keep the branch ready for inspection), compute final stats with `summary.py`, and report before/after metrics. Do not `git push` or restart production services without explicit confirmation.
+   - Once all packages meet the stop rule, run `worktree.py integrate --state-dir` to verify trailers + sealed `candidate.json` trees and fast-forward merge (or keep the branch ready for inspection), compute final stats with `summary.py`, and report before/after metrics. Do not `git push` or restart production services without explicit confirmation.
 ```
 
 ### Template B: Unattended Roadmap / Nightly Daemon Mode
@@ -114,24 +123,88 @@ Once validated, run `dual-loop roadmap run --roadmap ../roadmap-state/roadmap.js
 | Dimension | Ordinary Agent Skill (`SKILL.md` only) | `dual-loop-dev` (This Framework) | Macro Workspace Harness (e.g., [TaskKit](https://github.com/abuttoncc/agent-taskkit)) |
 |---|---|---|---|
 | **Enforcement** | **Soft prompt guidance**: relies on LLM compliance; prone to silent retries, weakened assertions, and self-approval in long sessions | **Hard cryptographic & state-machine gates**: separated `0600` role keys, pre/post-check SHA-256 `candidate.json` sealing, and hash-chained `events.jsonl` | **Handoff & lifecycle order**: cross-session task folders, `handoffs/` checkpoints, and frozen deliverable protection |
-| **Execution Model** | Passive instructions inside a chat session | **Dual-mode**: works both as an in-session Skill AND as an outer CLI orchestrator/daemon dispatching `claude` / `codex` workers | Workspace-level task tracking & milestone indexing |
+| **Execution Model** | Passive instructions inside a chat session | **Tri-modal**: works as an in-session Skill, an outer CLI orchestrator/daemon dispatching `claude` / `codex` workers, and a zero-install cloud self-bootstrap workflow | Workspace-level task tracking & milestone indexing |
 | **Interoperability** | Domain skills (framework specs, UI rules) plug into `profile.json` `docs` and `policy_files` to be hash-frozen and audited by the cold Reviewer | Governs the inner/outer code-change loop, Git worktree isolation, and adversarial verification | Shares the exact `spec.json` + `expected.csv` contract protocol—use TaskKit for macro project handoffs and `dual-loop-dev` for supervised code execution |
 
 ---
 
-## Usage Modes
+## Usage Guide
 
-1. **Unattended Multi-Task Roadmap Runner / Daemon**:
-   ```bash
-   dual-loop roadmap run --roadmap roadmap.json --state-dir ../roadmap-state
-   dual-loop roadmap daemon --roadmap roadmap.json --state-dir ../roadmap-state --poll-interval 15
-   dual-loop worktree integrate --repo . --worktree <isolated_worktree_path> --state-dir ../roadmap-state
-   ```
-2. **Single-Task Automated Outer-Loop Orchestrator**:
-   ```bash
-   dual-loop orchestrate --task-config task.json --state-dir ../task-state
-   ```
-3. **Granular State-Machine CLI** (`dual-loop controller init | issue | execute | review | recycle | status` + `dual-loop contract`).
+### 1. Add `profile.json` to Target Repository
+
+Decouple repository-specific protected paths and preflight settings in `profile.json` (schema: [`schemas/profile.schema.json`](schemas/profile.schema.json)):
+
+```json
+{
+  "schema_version": 1,
+  "name": "my-project",
+  "protected_paths": ["core/", "migrations/", "profile.json"],
+  "require_clean_worktree": true,
+  "preflight": { "port": 3000 },
+  "docs": ["ARCHITECTURE.md"]
+}
+```
+
+### 2. Mode 1: Single-Task Automated Outer-Loop Orchestrator (`dual-loop orchestrate`)
+
+Supports `"kind": "claude"` (Claude Code CLI), `"kind": "codex"` (Codex CLI), or `"kind": "command"` (any custom script):
+
+```bash
+dual-loop orchestrate --task-config task.json --state-dir ../task-state/auth-guard
+```
+
+### 3. Mode 2: Multi-Task DAG Roadmap & Unattended Daemon (`dual-loop roadmap`)
+
+Write `roadmap.json` (schema: [`schemas/roadmap.schema.json`](schemas/roadmap.schema.json)):
+
+```bash
+# Run all ready tasks in topological order inside an external Git worktree
+dual-loop roadmap run --roadmap roadmap.json --state-dir ../roadmap-state
+
+# Daemon mode: continuously watch roadmap.json with flock lock and heartbeat file
+dual-loop roadmap daemon --roadmap roadmap.json --state-dir ../roadmap-state --poll-interval 15
+
+# Inspect live status and generated progress.md board
+dual-loop roadmap status --state-dir ../roadmap-state
+
+# Cross-verify commit trailers, hash-chained ledgers, and sealed candidate.json trees, then merge
+dual-loop worktree integrate --repo . --worktree <isolated_worktree_path> --state-dir ../roadmap-state
+```
+
+### 4. Mode 3: Granular State-Machine CLI (`dual-loop controller`)
+
+```bash
+dual-loop preflight --repo . --workspace ..
+dual-loop controller init --root "$CTRL" --authority "$AUTH"
+dual-loop contract init-case --root "$CASE" --topic fix-parser --question "Fix edge case" --criteria-json criteria.json
+dual-loop contract freeze --root "$CASE"
+dual-loop controller issue --root "$CTRL" --token "$AUTH/supervisor.key" --manifest manifest.json
+dual-loop controller execute --root "$CTRL" --token "$AUTH/executor.key"
+dual-loop contract compare --root "$CASE" --observations outputs/obs.json --out outputs/review-comparison.json
+dual-loop controller review --root "$CTRL" --token "$AUTH/reviewer.key" --verdict accept --feedback feedback.md --report outputs/review-comparison.json
+```
+
+---
+
+## Repository Layout
+
+| Path | Description |
+|---|---|
+| [`docs/OVERVIEW.en.md`](docs/OVERVIEW.en.md) | Shareable English technical overview, design philosophy, and under-the-hood deep dive |
+| [`AGENTS.md`](AGENTS.md) / [`CLAUDE.md`](CLAUDE.md) | Zero-install self-bootstrap playbook for cloud and local AI coding agents |
+| [`SKILL.md`](SKILL.md) | Universal Agent Skill entrypoint (tier selection, preflight, 3-role loop) |
+| [`dual_loop/cli.py`](dual_loop/cli.py) | Unified `dual-loop` CLI dispatcher |
+| [`scripts/contract.py`](scripts/contract.py) | Zero-dependency prospective contract engine (TaskKit v0.5 compatible) |
+| [`scripts/controller.py`](scripts/controller.py) | Single-attempt state machine, candidate sealing, process-group reaping, and hash-chain archive |
+| [`scripts/worktree.py`](scripts/worktree.py) | Isolated Git worktree manager, TCP port leases, `LOCK`, and ledger-verified integration |
+| [`scripts/orchestrator.py`](scripts/orchestrator.py) | Single-task outer-loop orchestrator (scoped worker keys, auto-submit, attribution routing) |
+| [`scripts/roadmap.py`](scripts/roadmap.py) | Multi-task DAG runner & unattended daemon (cycle detection, `progress.md`, snapshot recovery) |
+| [`scripts/preflight.py`](scripts/preflight.py) | Read-only occupancy check for active ledgers, `LOCK` files, recent sessions, and TCP ports |
+| [`scripts/summary.py`](scripts/summary.py) | Deterministic Git audit summary with supervised-round trailer verification |
+| [`schemas/`](schemas/) | JSON Schemas for `profile`, `manifest`, `roadmap`, and `rule-proposal` |
+| [`references/`](references/) | Architecture boundaries, L1/L2/L3 tiers, brief templates, failure casebook, and rule evolution |
+| [`examples/minimal-project/`](examples/minimal-project/) | Self-contained 2-task DAG end-to-end runnable demonstration |
+| [`tests/`](tests/) | Adversarial test suite covering unauthorized roles, tampering, timeouts, replay, and DAG recovery |
 
 ---
 

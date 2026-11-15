@@ -398,12 +398,20 @@ class WorktreeAndToolingTests(unittest.TestCase):
     def test_unified_cli_dispatcher(self) -> None:
         env = {**dict(subprocess.os.environ), "PYTHONPATH": str(REPO_ROOT)}
         ver = subprocess.run([sys.executable, "-m", "dual_loop.cli", "--version"], capture_output=True, text=True, env=env, check=True)
-        self.assertEqual(ver.stdout.strip(), "0.1.1")
+        self.assertEqual(ver.stdout.strip(), "0.1.2")
         hlp = subprocess.run([sys.executable, "-m", "dual_loop.cli", "controller", "--help"], capture_output=True, text=True, env=env, check=True)
         self.assertIn("recycle", hlp.stdout)
 
     def test_agent_self_bootstrap_entrypoints(self) -> None:
-        for required_doc in ("AGENTS.md", "CLAUDE.md", "SKILL.md", "README.md", "README.en.md"):
+        for required_doc in (
+            "AGENTS.md",
+            "CLAUDE.md",
+            "SKILL.md",
+            "README.md",
+            "README.en.md",
+            "docs/OVERVIEW.en.md",
+            "docs/assets/architecture-en.svg",
+        ):
             doc_path = REPO_ROOT / required_doc
             self.assertTrue(doc_path.is_file(), f"missing agent entrypoint: {required_doc}")
             self.assertGreater(len(doc_path.read_text(encoding="utf-8").strip()), 100)

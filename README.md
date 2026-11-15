@@ -1,6 +1,6 @@
 # Dual-Loop Dev (`dual-loop-dev`)
 
-[English Documentation](README.en.md) · [**🤖 云端/本地 AI Agent 自引导手册 (`AGENTS.md`)**](AGENTS.md) · [`SKILL.md`](SKILL.md) · [架构与安全边界](references/architecture.md) · [L1/L2/L3 分档指南](references/workflow-tiers.md) · [真实拦截案例集](references/failure-casebook.md)
+[**🇺🇸 English README**](README.en.md) · [**📄 English Technical Overview (Shareable)**](docs/OVERVIEW.en.md) · [**🤖 云端/本地 AI Agent 自引导手册 (`AGENTS.md`)**](AGENTS.md) · [`SKILL.md`](SKILL.md) · [架构与安全边界](references/architecture.md) · [L1/L2/L3 分档指南](references/workflow-tiers.md) · [真实拦截案例集](references/failure-casebook.md)
 
 **面向 AI 编码智能体的双层循环受监督自动化开发框架。**
 

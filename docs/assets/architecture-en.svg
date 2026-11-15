@@ -1,0 +1,71 @@
+<svg viewBox="0 0 760 316" width="760" height="316" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="dual-loop-dev architecture diagram">
+  <style>
+    .bg { fill: #ffffff; stroke: #e2e8f0; stroke-width: 1.5; }
+    .band-outer { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 1; stroke-dasharray: 4 4; }
+    .node-store { fill: #f1f5f9; stroke: #64748b; stroke-width: 1.25; }
+    .node-focal { fill: #eff6ff; stroke: #2563eb; stroke-width: 1.5; }
+    .node-step { fill: #ffffff; stroke: #94a3b8; stroke-width: 1.25; }
+    .pill { fill: #e2e8f0; }
+    .pill-accent { fill: #dbeafe; }
+    .t-title { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, sans-serif; font-size: 15px; font-weight: 600; fill: #0f172a; }
+    .t-sub { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, sans-serif; font-size: 12.5px; font-weight: 400; fill: #475569; }
+    .t-code { font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size: 12px; font-weight: 500; fill: #1e3a8a; }
+    .t-caption { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, sans-serif; font-size: 11.5px; font-weight: 600; letter-spacing: 0.04em; fill: #64748b; }
+    .edge { fill: none; stroke: #334155; stroke-width: 1.5; stroke-linecap: round; stroke-dasharray: 3 4; }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="7.5" refY="5" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" orient="auto">
+      <path d="M 2.5 1.5 L 7.5 5 L 2.5 8.5" fill="none" stroke="#334155" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+    </marker>
+  </defs>
+
+  <rect class="bg" x="2" y="2" width="756" height="312" rx="16" />
+
+  <text class="t-caption" x="32" y="28">DUAL-LOOP SUPERVISED EXECUTION &amp; ADVERSARIAL REVIEW GATE</text>
+
+  <!-- Row 1: Supervisor -> Controller -> Executor -->
+  <rect class="node-store" x="32" y="46" width="196" height="82" rx="41" />
+  <text class="t-title" x="130" y="77" text-anchor="middle" dominant-baseline="central">Supervisor</text>
+  <text class="t-code" x="130" y="100" text-anchor="middle" dominant-baseline="central">freeze + issue</text>
+
+  <line class="edge" x1="234" y1="87" x2="274" y2="87" marker-end="url(#arrow)" />
+
+  <rect class="node-focal" x="282" y="46" width="196" height="82" rx="41" />
+  <text class="t-title" x="380" y="77" text-anchor="middle" dominant-baseline="central">Controller Gate</text>
+  <text class="t-sub" x="380" y="100" text-anchor="middle" dominant-baseline="central">0600 keys · SHA-256 chain</text>
+
+  <line class="edge" x1="484" y1="87" x2="524" y2="87" marker-end="url(#arrow)" />
+
+  <rect class="node-step" x="532" y="46" width="196" height="82" rx="41" />
+  <text class="t-title" x="630" y="77" text-anchor="middle" dominant-baseline="central">Inner Executor</text>
+  <text class="t-sub" x="630" y="100" text-anchor="middle" dominant-baseline="central">allowlist · single attempt</text>
+
+  <!-- Right vertical transition: execute -->
+  <line class="edge" x1="630" y1="132" x2="630" y2="152" />
+  <rect class="pill-accent" x="582" y="156" width="96" height="24" rx="12" />
+  <text class="t-code" x="630" y="168" text-anchor="middle" dominant-baseline="central">execute (1x)</text>
+  <line class="edge" x1="630" y1="184" x2="630" y2="204" marker-end="url(#arrow)" />
+
+  <!-- Row 2: Candidate Seal -> Cold Reviewer -> 3-Way Verdict -->
+  <rect class="node-store" x="532" y="212" width="196" height="82" rx="41" />
+  <text class="t-title" x="630" y="243" text-anchor="middle" dominant-baseline="central">Candidate Seal</text>
+  <text class="t-sub" x="630" y="266" text-anchor="middle" dominant-baseline="central">pre/post hash · proc group</text>
+
+  <line class="edge" x1="526" y1="253" x2="486" y2="253" marker-end="url(#arrow)" />
+
+  <rect class="node-focal" x="282" y="212" width="196" height="82" rx="41" />
+  <text class="t-title" x="380" y="243" text-anchor="middle" dominant-baseline="central">Cold Reviewer</text>
+  <text class="t-sub" x="380" y="266" text-anchor="middle" dominant-baseline="central">cold diff · /tmp mutation</text>
+
+  <line class="edge" x1="276" y1="253" x2="236" y2="253" marker-end="url(#arrow)" />
+
+  <rect class="node-step" x="32" y="212" width="196" height="82" rx="41" />
+  <text class="t-title" x="130" y="243" text-anchor="middle" dominant-baseline="central">Attributed Verdict</text>
+  <text class="t-code" x="130" y="266" text-anchor="middle" dominant-baseline="central">Accept | Reject</text>
+
+  <!-- Left vertical transition: recycle -->
+  <line class="edge" x1="130" y1="208" x2="130" y2="184" />
+  <rect class="pill" x="64" y="156" width="132" height="24" rx="12" />
+  <text class="t-code" x="130" y="168" text-anchor="middle" dominant-baseline="central">recycle (budgeted)</text>
+  <line class="edge" x1="130" y1="152" x2="130" y2="134" marker-end="url(#arrow)" />
+</svg>
