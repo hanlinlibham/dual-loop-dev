@@ -201,6 +201,174 @@ class ControllerTests(unittest.TestCase):
         self.call("review", "--verdict", "reject", "--feedback", self.feedback, role="reviewer")
         return json.loads((self.control / "state.json").read_text(encoding="utf-8"))["rounds"][-1]["review_hash"]
 
+    def verification_fixture(self, feedback: str = "ATTRIBUTION: contract\nVERIFICATION_ONLY: true\nProbe syntax is wrong; candidate and acceptance are unchanged.\n") -> tuple[str, Path, Path]:
+        initial, _ = self.manifest(command=[sys.executable, "-c", "raise SystemExit(1)"])
+        initial_data = json.loads(initial.read_text())
+        trailing_check = {"id": "after-probe", "argv": [sys.executable, "-c", "print('previously skipped check')"]}
+        initial_data["checks"].append(trailing_check)
+        initial.write_text(json.dumps(initial_data))
+        self.call("issue", "--manifest", initial, role="supervisor")
+        (self.repo / "code.txt").write_text("candidate to preserve\n", encoding="utf-8")
+        self.call("execute", role="executor", code=1)
+        self.feedback.write_text(feedback, encoding="utf-8")
+        review_hash = self.reject()
+        manifest, case = self.manifest(2)
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        data["checks"].append(trailing_check)
+        data.update({
+            "round_kind": "verification",
+            "parent_round": 1,
+            "expected_candidate_sha256": hashlib.sha256((self.control / "rounds/001/candidate.json").read_bytes()).hexdigest(),
+        })
+        manifest.write_text(json.dumps(data), encoding="utf-8")
+        return review_hash, manifest, case
+
+    def recycle_verification(self, review_hash: str, manifest: Path, *, code: int = 0) -> subprocess.CompletedProcess:
+        return self.call("recycle", "--manifest", manifest, "--from-review", review_hash,
+                         "--change-reason", "Correct the probe without changing the candidate", role="supervisor", code=code)
+
+    def test_verification_preserves_candidate_and_failed_history(self) -> None:
+        review_hash, manifest, case = self.verification_fixture()
+        failed = (self.control / "rounds/001/execution.json").read_bytes()
+        original = (self.repo / "code.txt").read_bytes()
+        self.recycle_verification(review_hash, manifest)
+        self.call("execute", role="executor")
+        self.call("execute", role="executor", code=2)
+        self.accept(self.report(case))
+        self.assertEqual((self.repo / "code.txt").read_bytes(), original)
+        self.assertEqual((self.control / "rounds/001/execution.json").read_bytes(), failed)
+        self.assertEqual(len(json.loads(failed)["checks"]), 1)
+        self.assertEqual(len(json.loads((self.control / "rounds/002/execution.json").read_text())["checks"]), 2)
+        self.assertEqual(json.loads((self.control / "state.json").read_text())["max_rounds"], 2)
+        shutil.rmtree(case)
+        self.policy.unlink()
+        self.call("status", "--full-replay")
+
+    def test_verification_requires_explicit_contract_only_review(self) -> None:
+        review_hash, manifest, _ = self.verification_fixture("ATTRIBUTION: code\nVERIFICATION_ONLY: true\nFix candidate.\n")
+        self.recycle_verification(review_hash, manifest, code=2)
+        self.assertFalse((self.control / "rounds/002").exists())
+
+    def test_verification_rejects_initial_round(self) -> None:
+        manifest, _ = self.manifest()
+        data = json.loads(manifest.read_text())
+        data.update({"round_kind": "verification", "parent_round": 1, "expected_candidate_sha256": "a" * 64})
+        manifest.write_text(json.dumps(data))
+        self.call("issue", "--manifest", manifest, role="supervisor", code=2)
+
+    def test_verification_cannot_change_acceptance_scope_or_drop_checks(self) -> None:
+        review_hash, manifest, _ = self.verification_fixture()
+        original = json.loads(manifest.read_text())
+        for patch in ({"allowed_paths": ["code.txt", "extra.txt"]},
+                      {"checks": [{"id": "different-check", "argv": [sys.executable, "-c", "pass"]}]},
+                      {"parent_round": 2}, {"expected_candidate_sha256": "b" * 64}):
+            with self.subTest(patch=patch):
+                manifest.write_text(json.dumps({**original, **patch}))
+                self.recycle_verification(review_hash, manifest, code=2)
+        changed_case = self.case(3)
+        spec = json.loads((changed_case / "spec.json").read_text())
+        (changed_case / spec["baseline"]).unlink()
+        expected = changed_case / "inputs/expected.csv"
+        expected.write_text(expected.read_text().replace("Evidence recorded", "Any output accepted"))
+        self.contract_call("freeze", changed_case)
+        manifest.write_text(json.dumps({**original, "case_root": str(changed_case)}))
+        self.recycle_verification(review_hash, manifest, code=2)
+
+    def test_verification_cannot_change_head_or_profile(self) -> None:
+        review_hash, manifest, _ = self.verification_fixture()
+        previous_profile = self.profile.read_bytes()
+        profile = json.loads(previous_profile)
+        profile["protected_paths"] = []
+        self.profile.write_text(json.dumps(profile))
+        self.recycle_verification(review_hash, manifest, code=2)
+        self.profile.write_bytes(previous_profile)
+        self.git("commit", "--allow-empty", "-qm", "Move HEAD without changing candidate files")
+        self.recycle_verification(review_hash, manifest, code=2)
+
+    def test_verification_cannot_change_governance_policy(self) -> None:
+        review_hash, manifest, _ = self.verification_fixture()
+        original_policy = self.policy.read_bytes()
+        self.policy.write_text("Relaxed governance policy.\n")
+        self.recycle_verification(review_hash, manifest, code=2)
+        self.policy.write_bytes(original_policy)
+        data = json.loads(manifest.read_text())
+        replacement = self.base / "replacement-policy.md"
+        replacement.write_bytes(original_policy)
+        data["policy_files"] = [str(replacement)]
+        manifest.write_text(json.dumps(data))
+        self.recycle_verification(review_hash, manifest, code=2)
+
+    def test_verification_cannot_replace_contract_engine(self) -> None:
+        review_hash, manifest, _ = self.verification_fixture()
+        other_engine = self.base / "different-contract.py"
+        other_engine.write_bytes(Path(self.contract_script).read_bytes() + b"\n# Changed engine\n")
+        data = json.loads(manifest.read_text())
+        data["taskkit_script"] = str(other_engine)
+        manifest.write_text(json.dumps(data))
+        self.recycle_verification(review_hash, manifest, code=2)
+
+    def test_verification_can_revise_case_local_probe_policy(self) -> None:
+        initial, first_case = self.manifest(command=[sys.executable, "-c", "raise SystemExit(1)"])
+        probe = first_case / "inputs/probe.py"
+        probe.write_text("raise SyntaxError('bad probe')\n")
+        data = json.loads(initial.read_text())
+        data["policy_files"].append(str(probe))
+        initial.write_text(json.dumps(data))
+        self.call("issue", "--manifest", initial, role="supervisor")
+        self.call("execute", role="executor", code=1)
+        self.feedback.write_text("ATTRIBUTION: contract\nVERIFICATION_ONLY: true\nFix the probe only.\n")
+        review_hash = self.reject()
+        manifest, next_case = self.manifest(2)
+        next_probe = next_case / "inputs/probe.py"
+        next_probe.write_text("assert True\n")
+        data = json.loads(manifest.read_text())
+        data["policy_files"].append(str(next_probe))
+        data.update({"round_kind": "verification", "parent_round": 1,
+                     "expected_candidate_sha256": hashlib.sha256((self.control / "rounds/001/candidate.json").read_bytes()).hexdigest()})
+        original_probe = probe.read_bytes()
+        probe.write_text("assert True\n")
+        manifest.write_text(json.dumps({**data, "policy_files": [str(self.policy), str(probe), str(next_probe)]}))
+        self.recycle_verification(review_hash, manifest, code=2)
+        probe.write_bytes(original_probe)
+        manifest.write_text(json.dumps(data))
+        self.recycle_verification(review_hash, manifest)
+        self.call("execute", role="executor")
+        self.accept(self.report(next_case))
+
+    def test_verification_still_consumes_round_budget(self) -> None:
+        review_hash, manifest, _ = self.verification_fixture()
+        self.recycle_verification(review_hash, manifest)
+        self.call("execute", role="executor")
+        review_hash = self.reject()
+        third, _ = self.manifest(3, max_rounds=2)
+        data = json.loads(third.read_text())
+        data.update({"round_kind": "verification", "parent_round": 2,
+                     "expected_candidate_sha256": hashlib.sha256((self.control / "rounds/002/candidate.json").read_bytes()).hexdigest()})
+        third.write_text(json.dumps(data))
+        self.recycle_verification(review_hash, third, code=2)
+        self.assertEqual(len(json.loads((self.control / "state.json").read_text())["rounds"]), 2)
+
+    def test_verification_rejects_candidate_drift_before_issue(self) -> None:
+        review_hash, manifest, _ = self.verification_fixture()
+        (self.repo / "code.txt").write_text("silently changed\n")
+        self.recycle_verification(review_hash, manifest, code=2)
+
+    def test_verification_rejects_candidate_drift_before_execute(self) -> None:
+        review_hash, manifest, _ = self.verification_fixture()
+        self.recycle_verification(review_hash, manifest)
+        (self.repo / "code.txt").write_text("changed after verification issue\n")
+        self.call("execute", role="executor", code=1)
+        execution = json.loads((self.control / "rounds/002/execution.json").read_text())
+        self.assertEqual(execution["checks"], [])
+        self.assertFalse(execution["passed"])
+
+    def test_verification_rejects_candidate_drift_before_acceptance(self) -> None:
+        review_hash, manifest, case = self.verification_fixture()
+        self.recycle_verification(review_hash, manifest)
+        self.call("execute", role="executor")
+        (self.repo / "code.txt").write_text("changed after verification checks\n")
+        self.accept(self.report(case), code=2)
+
     def test_default_bundled_contract_script_when_omitted(self) -> None:
         _, case = self.issue(omit_contract_script=True)
         (self.repo / "code.txt").write_text("bundled contract edit\n", encoding="utf-8")

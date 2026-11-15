@@ -1,6 +1,8 @@
 # CLAUDE.md
 
-Read [`AGENTS.md`](AGENTS.md) first, then [`SKILL.md`](SKILL.md).
+Read [AGENTS.md](AGENTS.md) for the single command/configuration entry point and [SKILL.md](SKILL.md) for workflow rules.
 
-- **If asked to apply `dual-loop-dev` to another codebase**: Follow Sections 1–5 of [`AGENTS.md`](AGENTS.md) (clone outside the target repo, run `preflight.py`, isolate in a Git worktree via `worktree.py`, freeze contracts via `contract.py`, enforce single-attempt `execute` and fresh-context cold `review` via `controller.py` or `orchestrator.py` / `roadmap.py`, and integrate commits with `Accepted in supervised round <case> (review <hash8>)` trailers).
-- **If modifying `dual-loop-dev` itself**: Keep pure Python 3.10+ stdlib + Git (zero third-party dependencies) and run both `env -u PYTHONPYCACHEPREFIX python3 -m unittest discover -s tests -p "test_*.py" -v` and `python3 examples/minimal-project/run_demo.py`.
+- When applying the framework, keep state outside the target repository, use targeted development checks, submit once with execute, then obtain independent review of the diff, sealed receipts and relevant risks.
+- First review is cold; one scoped follow-up by the same reviewer is allowed when the native host supports it. Changed goals/scope or public-contract/concurrency/security assumptions require fresh review. A single session must not claim independent acceptance.
+- Pure probe/fixture repairs may use a linked verification round without another LLM executor. It still runs all checks, consumes budget and keeps the rejected parent record.
+- When maintaining this repository, preserve the core invariants, use no external dependencies, and run the tests and demo listed in AGENTS.md.

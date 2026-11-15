@@ -15,6 +15,21 @@
     "max_rounds"
   ],
   "properties": {
+    "round_kind": {
+      "enum": ["development", "verification"],
+      "default": "development",
+      "description": "Verification reruns all checks on the unchanged prior candidate without an implementation agent."
+    },
+    "parent_round": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Immediately preceding rejected round; required for verification."
+    },
+    "expected_candidate_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$",
+      "description": "SHA-256 of the parent round's archived candidate.json; required for verification."
+    },
     "repo": {
       "type": "string",
       "description": "Absolute path to the Git worktree root."
@@ -104,5 +119,12 @@
       "maximum": 20
     }
   },
+  "allOf": [
+    {
+      "if": {"properties": {"round_kind": {"const": "verification"}}, "required": ["round_kind"]},
+      "then": {"required": ["parent_round", "expected_candidate_sha256"]},
+      "else": {"not": {"anyOf": [{"required": ["parent_round"]}, {"required": ["expected_candidate_sha256"]}]}}
+    }
+  ],
   "additionalProperties": true
 }

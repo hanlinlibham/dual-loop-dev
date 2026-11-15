@@ -1,75 +1,37 @@
-# AGENTS.md — AI Agent Self-Bootstrap & Execution Guide (`dual-loop-dev`)
+# AGENTS.md — Apply or Maintain dual-loop-dev
 
-> **If a user pointed you to `https://github.com/hanlinlibham/dual-loop-dev` (or cloned this repository) and asked you to apply it to a codebase, read Sections 1–5 below. Everything you need to run the framework on the first try—without `pip install` or third-party packages—is in this file.**
->
-> **若用户让你读取本仓库并用这套双层循环框架去开发/优化某个目标代码库，请直接按下方第 1–5 节执行；无需 `pip install`，克隆后仅凭 Python 3.10+ 标准库与 Git 即可直接运行。若你要修改本框架自身源码，见第 6 节。**
+Read this file for the command/configuration entry point. [SKILL.md](SKILL.md) defines the shared workflow; [review briefs](references/brief-templates.md) and [risk tiers](references/workflow-tiers.md) add details when needed. 使用本框架时以本文件为命令入口，不重复维护多份任务定义。
 
----
+## 1. Choose the mode
 
-## 1. Mode Router / 先确认你的任务场景
+- **Native subagents:** the host is supervisor, an executor implements, and an independent reviewer judges. See Sections 2–5.
+- **CLI workers:** use the single-task orchestrator or roadmap runner in Section 3. Supported backends are `claude`, `codex`, and custom `command`.
+- **No independent reviewer available:** seal the candidate and leave it awaiting review. A single session switching role tokens must not claim independent acceptance.
+- **Maintaining this framework:** follow Section 6.
 
-- **Scenario A — Apply `dual-loop-dev` to a target repository (使用本框架推进目标仓库开发)**  
-  Follow **Sections 2 → 3 → 4 → 5** below. Detailed tier/review methodology lives in [`SKILL.md`](SKILL.md), [`references/workflow-tiers.md`](references/workflow-tiers.md), and [`references/brief-templates.md`](references/brief-templates.md).
-- **Scenario B — Maintain or extend `dual-loop-dev` itself (开发维护本框架自身)**  
-  Jump to **Section 6**.
+First review is cold and independent of the author. A native host may reuse that reviewer once for a scoped fix it requested. Changed objectives/scope, new public-contract/concurrency/security assumptions, repeated failure, or evidence of a missed defect require a fresh cold reviewer. CLI calls remain separate processes; a focused follow-up brief does not resume a reviewer session.
 
----
+## 2. Prepare an isolated workspace
 
-## 2. Zero-Install Cloud Bootstrap / 云端与新环境免安装挂载
+Requires Python 3.10+ standard library and Git, with no package install. Clone the framework outside the target worktree:
 
-`dual-loop-dev` uses **only the Python 3.10+ standard library and Git**. Do **NOT** clone it inside the target repository worktree (keeping framework files and state outside the target repo prevents polluting Git snapshots).
-
-```bash
-# 1. Clone dual-loop-dev outside your target repository
-export DL="${DUAL_LOOP_HOME:-/tmp/dual-loop-dev}"
-if [ ! -d "$DL/.git" ]; then
-  git clone --depth 1 https://github.com/hanlinlibham/dual-loop-dev.git "$DL"
-fi
-
-# 2. Point TARGET_REPO to the codebase you are improving, and STATE outside TARGET_REPO
-export TARGET_REPO="$(pwd)"
-export STATE="/tmp/dual-loop-state/$(basename "$TARGET_REPO")"
-mkdir -p "$STATE"
-```
-
-### Critical Path & Environment Rules (必守铁律，违反会直接报错拦截)
-1. **External State Only**: `--root` (`control`), `--authority` (`authority`), and `case_root` **MUST** reside outside `TARGET_REPO` (never inside `TARGET_REPO` or any subdirectory of it).
-2. **Absolute Paths in `manifest.json`**: `repo`, `case_root`, `profile`, and every entry in `policy_files` inside `manifest.json` **MUST** be absolute paths (`/...`). `allowed_paths` and `protected_paths` are `TARGET_REPO`-relative paths (use trailing `/` for directories, e.g. `"src/core/"`).
-3. **Ignore Build/Bytecode Caches**: `controller.py` hashes `git ls-files --cached --others --exclude-standard` before and after every check. Before issuing Round 1, ensure `.gitignore` in `TARGET_REPO` ignores generated artifacts (`__pycache__/`, `*.py[cod]`, `.pytest_cache/`, `node_modules/`, `dist/`, `.DS_Store`), or pass `-B` / `PYTHONDONTWRITEBYTECODE=1` to Python checks so checks never create un-ignored files.
-4. **Create `profile.json` & Policy Anchor**: If `TARGET_REPO/profile.json` does not exist yet, create and commit it (or place `profile.json` and a baseline `POLICY.md` in `$STATE/meta/` with absolute paths in `manifest.json` if the repository must remain untouched before Round 1).
-
----
-
-## 3. Choosing the Execution Mode for Your Runtime / 按当前 Agent 环境选择运行模式
-
-| Your Runtime Capabilities | Recommended Mode | How to Run |
-|---|---|---|
-| **Can spawn subagents** (Claude Code `Task`/`Agent`, Cursor subagents, Codex multi-agent, Antigravity `invoke_subagent`) | **Mode A: Supervisor + Subagents** | You act as `supervisor`. Copy only `executor.key` to `$STATE/worker-tokens/` for an **Executor** subagent, then spawn a **fresh-context Cold Reviewer** subagent with only `reviewer.key`. See Section 4. |
-| **Has `claude` or `codex` CLI in shell** (Cloud VM / night-run container) | **Mode B: Automated Orchestrator / Roadmap Daemon** | Write `task.json` or `roadmap.json` (see [`schemas/roadmap.schema.json`](schemas/roadmap.schema.json)) and run `python3 "$DL/scripts/orchestrator.py"` or `python3 "$DL/scripts/roadmap.py" run`. |
-| **Single-session cloud sandbox** (Bash + Python + Git only; no subagent tool or nested CLI) | **Mode C: Single-Session Enforced Gate** | Still run the full `worktree.py` -> `contract.py` -> `controller.py` state machine to enforce path allowlists, single-attempt sealing, `/tmp` mutation probes, and review trailers. Perform the cold diff audit and `/tmp` counterexample probe explicitly before `review`, and set `"evidence_level": "single-session-verified"` in `observations.json`. |
-
----
-
-## 4. Exact Step-by-Step CLI & JSON Recipe / 零猜测标准执行流与最小合法 JSON
-
-### Step 1 — Read-Only Occupancy Preflight & Baseline Diagnosis
-```bash
+```sh
+git clone https://github.com/hanlinlibham/dual-loop-dev.git /tmp/dual-loop-dev
+export DL=/tmp/dual-loop-dev
+export TARGET_REPO=/absolute/path/to/target-repository
+export STATE=/absolute/path/outside-target/task-state
 python3 "$DL/scripts/preflight.py" --repo "$TARGET_REPO" --workspace "$(dirname "$TARGET_REPO")"
-```
-Inspect architecture, run baseline tests/benchmarks read-only, and decompose the user's goal into 2–5 small staged packages (`L1` $\le 3$ files no behavior change; `L2` feature/bugfix; `L3` cross-module refactor/protocol change).
-
-### Step 2 — Create an Isolated Git Worktree (Never Edit Primary Checkout Directly)
-```bash
-python3 "$DL/scripts/worktree.py" create \
-  --repo "$TARGET_REPO" \
-  --task-id "pkg-01" \
-  --worktree "$STATE/wt-pkg-01" \
-  --port-range 3200-3299 \
-  --lock-file "$STATE/LOCK"
-export WORK_REPO="$STATE/wt-pkg-01"
+python3 "$DL/scripts/worktree.py" create --repo "$TARGET_REPO" \
+  --task-id task-01 --worktree "$STATE/worktree" --port-range 3200-3299 --lock-file "$STATE/LOCK"
+export WORK_REPO="$STATE/worktree"
 ```
 
-Ensure `$STATE/meta/profile.json` and `$STATE/meta/POLICY.md` exist (or use existing files in `$WORK_REPO`):
+Use existing architecture and current test evidence; fill gaps with relevant baseline checks. Split work only where the goal needs distinct bounded packages. Choose risk by behavior, not file count or extension.
+
+Control, authority and case directories must be outside the target worktree. In manifests, `repo`, `case_root`, `profile`, and `policy_files` use absolute paths; writable/protected paths are repository-relative, with a trailing slash for directories. Ensure generated artifacts are ignored before issuing a round. Checks must not format or mutate tracked source.
+
+Create a profile and a policy anchor outside the worktree, or use existing repository files. A minimal profile is:
+
 ```json
 {
   "schema_version": 1,
@@ -79,47 +41,30 @@ Ensure `$STATE/meta/profile.json` and `$STATE/meta/POLICY.md` exist (or use exis
 }
 ```
 
-### Step 3 — Initialize Controller, Freeze Contract, and `issue` Round 1 (Supervisor)
-```bash
-export CTRL="$STATE/pkg-01/control"
-export AUTH="$STATE/pkg-01/authority"
-export CASE="$STATE/pkg-01/cases/r001"
+## 3. Maintain one task definition
 
-python3 "$DL/scripts/controller.py" init --root "$CTRL" --authority "$AUTH"
-```
+Store the objective, scope, criteria, checks and risk notes once in `task.json`; derive the contract, manifest and briefs. Replace the example paths and criteria with the actual task:
 
-Write `$STATE/pkg-01/criteria.json` (every row `requirement` MUST be `"required"` or `"not_applicable"`—`"investigate"` is rejected at `issue`):
-```json
-[
-  {
-    "id": "behavior-verified",
-    "requirement": "required",
-    "description": "Target behavior and edge cases work without regressions",
-    "basis": "Repository specification and baseline diagnosis",
-    "acceptance": "Automated checks exit 0 and cold /tmp counterexample probe fails when guard is removed"
-  }
-]
-```
-
-Freeze the prospective contract:
-```bash
-python3 "$DL/scripts/contract.py" init-case \
-  --root "$CASE" \
-  --topic "pkg-01" \
-  --question "Deliver package 01 safely" \
-  --criteria-json "$STATE/pkg-01/criteria.json"
-python3 "$DL/scripts/contract.py" freeze --root "$CASE"
-```
-
-Write `$STATE/pkg-01/manifest-r001.json` (**all external file/dir references must be absolute paths**):
 ```json
 {
-  "repo": "/abs/path/to/wt-pkg-01",
-  "case_root": "/abs/path/to/cases/r001",
-  "profile": "/abs/path/to/profile.json",
-  "policy_files": ["/abs/path/to/POLICY.md"],
+  "id": "task-01",
+  "title": "Deliver the specified behavior",
+  "repo": "/absolute/path/to/task-state/worktree",
+  "profile": "/absolute/path/to/profile.json",
+  "policy_files": ["/absolute/path/to/POLICY.md"],
   "allowed_paths": ["src/module.py", "tests/test_module.py"],
   "protected_paths": [],
+  "tier": "L2",
+  "brief": "State the requested behavior, relevant risks and stopping condition.",
+  "criteria": [
+    {
+      "id": "behavior-verified",
+      "requirement": "required",
+      "description": "Requested behavior and its relevant boundary cases work",
+      "basis": "The task specification",
+      "acceptance": "Checks pass and independent evidence covers the stated risks"
+    }
+  ],
   "checks": [
     {
       "id": "unit-tests",
@@ -129,122 +74,140 @@ Write `$STATE/pkg-01/manifest-r001.json` (**all external file/dir references mus
     }
   ],
   "max_rounds": 3,
-  "require_clean_worktree": true
+  "executor_backend": {"kind": "codex"},
+  "reviewer_backend": {"kind": "codex"}
 }
 ```
 
-Issue Round 1:
-```bash
-python3 "$DL/scripts/controller.py" issue \
-  --root "$CTRL" \
-  --token "$AUTH/supervisor.key" \
-  --manifest "$STATE/pkg-01/manifest-r001.json"
+Every criterion must be `required` or justified `not_applicable`; unresolved `investigate` cannot be issued. Optional `probe_preflight_checks` validate existing staged probe syntax/imports and fixture shape before the first issue and after contract repair. They run before creating the new case, so use staged source paths, not future case paths. They must not evaluate the business behavior still being implemented. A failed preflight preserves the previous round and consumes no new round; its logs remain under `probe-preflight/attempt-NNN/`.
+
+**CLI mode:** the orchestrator generates round artifacts from this task:
+
+```sh
+python3 "$DL/scripts/orchestrator.py" --task-config "$STATE/task.json" --state-dir "$STATE/run"
 ```
 
-### Step 4 — Inner Loop: Single-Attempt Implementation & `execute` (Executor)
-Copy **only** `executor.key` to a scoped worker token file (`install -m 600 "$AUTH/executor.key" "$STATE/worker-tokens/r001-executor.key"`).
-- Edit **only** `allowed_paths` inside `$WORK_REPO`.
-- Do **NOT** run `git commit`, `git reset`, `git checkout`, `git stash`, or modify `$CTRL` / `$CASE`.
-- Run local non-mutating self-checks, then run **`execute` at most once**:
-```bash
-python3 "$DL/scripts/controller.py" execute \
-  --root "$CTRL" \
-  --token "$STATE/worker-tokens/r001-executor.key"
-```
-Stop immediately after `execute` (whether exit code is `0` or `1`). Never modify any file in `$WORK_REPO` after `execute` seals `candidate.json`.
+For dependent packages, use [roadmap.schema.json](schemas/roadmap.schema.json):
 
-### Step 5 — Outer Loop: Cold Adversarial Review & Verdict (Reviewer)
-Use a **fresh-context** Reviewer (copying only `reviewer.key` to `$STATE/worker-tokens/r001-reviewer.key`):
-1. Do **NOT** modify any file in `$WORK_REPO`.
-2. Inspect `git -C "$WORK_REPO" diff HEAD`, `git -C "$WORK_REPO" status --porcelain`, and `$CTRL/rounds/001/execution.json` + check `.log` files.
-3. Copy relevant files to `/tmp` and run a **counterexample / mutation probe** (remove the new guard or feed adversarial inputs in `/tmp` to confirm tests genuinely catch regressions).
-4. Write evidence under `$CASE/outputs/review-evidence.md`. Compute the SHA-256 of the frozen baseline file (`BASELINE_SHA=$(python3 -c 'import hashlib,json,pathlib; c=pathlib.Path("'"$CASE"'"); s=json.loads((c/"spec.json").read_text()); print(hashlib.sha256((c/s["baseline"]).read_bytes()).hexdigest())')`), generate the current UTC timestamp (`NOW_UTC=$(python3 -c 'from datetime import datetime,timezone; print(datetime.now(timezone.utc).isoformat())')` — **must be $\ge$ `frozen_at`**), and write `$CASE/outputs/observations.json`:
+```sh
+python3 "$DL/scripts/roadmap.py" run --roadmap "$STATE/roadmap.json" --state-dir "$STATE/run"
+python3 "$DL/scripts/roadmap.py" daemon --roadmap "$STATE/roadmap.json" --state-dir "$STATE/run" --poll-interval 15
+```
+
+**Native-host mode:** derive `criteria.json` from task.criteria and a manifest containing repo, case_root, profile, policy_files, allowed_paths, protected_paths, checks and max_rounds. These are generated artifacts, not separately maintained specifications. Use [manifest.schema.json](schemas/manifest.schema.json) and [profile.schema.json](schemas/profile.schema.json).
+
+```sh
+export CTRL="$STATE/control"
+export AUTH="$STATE/authority"
+export CASE="$STATE/cases/r001"
+python3 "$DL/scripts/controller.py" init --root "$CTRL" --authority "$AUTH"
+python3 "$DL/scripts/contract.py" init-case --root "$CASE" --topic task-01 \
+  --question "Deliver the specified behavior" --criteria-json "$STATE/criteria.json"
+python3 "$DL/scripts/contract.py" freeze --root "$CASE"
+python3 "$DL/scripts/controller.py" issue --root "$CTRL" --token "$AUTH/supervisor.key" \
+  --manifest "$STATE/manifest-r001.json"
+```
+
+## 4. Execute once and review once
+
+Give the executor only a scoped copy of its role key. Create the worker-token directory first, use restrictive permissions, and remove copies after the worker returns.
+
+The executor edits only allowed paths and runs targeted checks during development. It does not need to pre-run the full formal checklist. Submit the candidate exactly once:
+
+```sh
+python3 "$DL/scripts/controller.py" execute --root "$CTRL" --token "$EXECUTOR_TOKEN"
+```
+
+The controller runs the frozen checks. Whether execution succeeds or fails, stop editing the candidate. The executor only adds design decisions, uncertainties and uncovered boundaries; receipts already contain paths, exits and check counts.
+
+The independent reviewer reads the diff, verifies scope and sealed candidate/check receipts, and performs risk-specific verification. Valid receipts do not require a routine second full run. Missing evidence, unclear environment, inconsistent candidate, unstable checks or a new risk justify rerunning relevant checks. Mutation probes run on a temporary copy and target important guards, with no quota.
+
+Write one `outputs/observations.json` with the original rows/evidence and a `review` object:
+
 ```json
 {
-  "baseline_sha256": "<64-hex-sha256-of-frozen-baseline-file>",
-  "observed_at": "<current-utc-iso8601-timestamp-after-freeze>",
-  "rows": [
-    {
-      "id": "behavior-verified",
-      "status": "PASS",
-      "detail": "Diff confined to allowed_paths; unit tests passed; /tmp mutation probe confirmed failure without guard",
-      "evidence_level": "independent-review",
-      "evidence": ["outputs/review-evidence.md"]
-    }
-  ]
+  "summary": "<actual review conclusion>",
+  "attribution": "code",
+  "verification_only": false,
+  "blockers": ["<criterion, trigger, impact and required follow-up>"],
+  "non_blocking": []
 }
 ```
-5. Reconcile observations and submit verdict (`--report` is **relative to `$CASE`**):
-```bash
-python3 "$DL/scripts/contract.py" compare \
-  --root "$CASE" \
-  --observations "outputs/observations.json" \
-  --out "outputs/review-comparison.json"
 
-# To ACCEPT (requires execution.json passed==true and all required rows PASS):
-python3 "$DL/scripts/controller.py" review \
-  --root "$CTRL" \
-  --token "$STATE/worker-tokens/r001-reviewer.key" \
-  --verdict accept \
-  --feedback "$CASE/outputs/feedback.md" \
-  --report "outputs/review-comparison.json"
+The attribution is required when rejecting; values are `code`, `contract`, or `environment`. See the [full observations example](references/brief-templates.md#observations主结果). Fill PASS/FAIL/NOT_RUN from actual evidence; never prefill PASS. The blockers list records unresolved code/product defects. For a pure probe/fixture failure, put the failure and its evidence in summary, leave product blockers empty, and use contract attribution with verification_only=true. Non-blocking suggestions do not delay acceptance.
 
-# Or to REJECT (include ATTRIBUTION: code | contract | environment in feedback.md):
-python3 "$DL/scripts/controller.py" review \
-  --root "$CTRL" \
-  --token "$STATE/worker-tokens/r001-reviewer.key" \
-  --verdict reject \
-  --feedback "$CASE/outputs/feedback.md"
+```sh
+python3 "$DL/scripts/controller.py" review --root "$CTRL" --token "$REVIEWER_TOKEN" \
+  --verdict accept --observations outputs/observations.json
 ```
 
-### Step 6 — Recycle on Rejection OR Trailer Commit & Integration on Acceptance (Supervisor)
-- **If `rejected`**: Read `$CTRL/rounds/001/feedback.md` and `review_hash` from `controller.py status --root "$CTRL"`:
-  - `ATTRIBUTION: code`: Keep acceptance standards unchanged, initialize a **new** case directory `$STATE/pkg-01/cases/r002` (chaining `previous_baseline` if revising), freeze it, and run:
-    ```bash
-    python3 "$DL/scripts/controller.py" recycle \
-      --root "$CTRL" \
-      --token "$AUTH/supervisor.key" \
-      --manifest "$STATE/pkg-01/manifest-r002.json" \
-      --from-review "$REVIEW_HASH" \
-      --change-reason "Round 2 fix for code defect identified in review"
-    ```
-  - `ATTRIBUTION: contract`: Keep candidate code untouched byte-for-byte; fix only contract/allowlist in `r002` and `recycle`.
-  - Stop and report to the user if `max_rounds` is exhausted.
-- **If `accepted`**: Commit inside `$WORK_REPO` with the mandatory audit trailer (`worktree.py integrate` rejects commits lacking this trailer!):
-  ```bash
-  REVIEW_HASH8=$(python3 "$DL/scripts/controller.py" status --root "$CTRL" | python3 -c 'import json,sys; print(json.load(sys.stdin)["review_hash"][:8])')
-  git -C "$WORK_REPO" add -- <allowed_changed_files>
-  git -C "$WORK_REPO" commit -m "$(printf 'Complete pkg-01\n\nAccepted in supervised round pkg-01-r1 (review %s)' "$REVIEW_HASH8")"
-  ```
-- Repeat Steps 3–6 for subsequent staged packages in `$WORK_REPO`. Once all packages pass:
-  ```bash
-  # Verify every commit carries a valid supervised-round trailer + matches sealed candidate.json, then fast-forward merge
-  python3 "$DL/scripts/worktree.py" integrate --repo "$TARGET_REPO" --worktree "$WORK_REPO" --state-dir "$STATE"
-  python3 "$DL/scripts/summary.py" --repo "$TARGET_REPO" --from <first_new_commit> --to HEAD
-  python3 "$DL/scripts/worktree.py" cleanup --repo "$TARGET_REPO" --worktree "$WORK_REPO" --delete-branch --lock-file "$STATE/LOCK"
-  ```
-  Do **NOT** run `git push` or production deployment unless the user explicitly requested it.
+Use `--verdict reject` for a failed or incomplete review. The command generates compatible feedback and comparison artifacts; it does not decide the truth of observations. Acceptance still requires successful execution, unchanged candidate, every required criterion passing, and no blockers.
 
----
+**Compatibility:** manual `contract.py compare` followed by `review --feedback <absolute-file> --report <case-relative-path>` remains supported, including external TaskKit. Existing archives and running tasks need no migration; switch workflow versions between tasks.
 
-## 5. Automated Multi-Task DAG Alternative (`roadmap.py`)
+## 5. Rejection, verification-only rounds and completion
 
-When running in an environment with `claude`, `codex`, or a custom worker script (`"kind": "command"`), you can skip manual per-round wiring by generating a `roadmap.json` validated against [`schemas/roadmap.schema.json`](schemas/roadmap.schema.json) and running:
+For code defects, fix only blocking findings without weakening acceptance. For contract defects, distinguish changed requirements from a broken probe. For environment defects, restore isolation/environment before continuing. A new case and rejecting review hash are required:
 
-```bash
-python3 "$DL/scripts/roadmap.py" run --roadmap "$STATE/roadmap.json" --state-dir "$STATE/run"
+```sh
+python3 "$DL/scripts/controller.py" recycle --root "$CTRL" --token "$AUTH/supervisor.key" \
+  --manifest "$STATE/manifest-r002.json" --from-review "$REVIEW_HASH" \
+  --change-reason "Address the identified blocking issue"
 ```
-See [`examples/minimal-project/run_demo.py`](examples/minimal-project/run_demo.py) for a complete, runnable 2-task reference implementation.
 
----
+A **verification-only round** is allowed only when the immediately preceding rejected review explicitly records `ATTRIBUTION: contract` and `VERIFICATION_ONLY: true`, with no code blockers. The entire candidate, HEAD, objective, criteria and scope remain unchanged; retain the complete ordered check-ID list. Profile, writable/protected paths and governance policy remain fixed. Revised case-local probe policies must be frozen at the corresponding path in the new case. Fix the probe/fixture so it still measures the original requirement, supported by positive and negative cases. Do not remove failed business assertions or include optional source cleanup.
 
-## 6. Contributing to `dual-loop-dev` Itself
+Add to the new manifest:
 
-If your task is modifying this repository (`dual-loop-dev`):
-1. **Zero external dependencies**: Use only the Python 3.10+ standard library and `git`.
-2. **Preserve core invariants**: Role token separation, single `execute` per round, pre/post-check SHA-256 `candidate.json` verification, process-group timeout cleanup, hash-chained `events.jsonl`, and offline-replayable `rounds/NNN/` archives.
-3. **Required verification before finishing**:
-   ```bash
-   env -u PYTHONPYCACHEPREFIX -u PYTHONDONTWRITEBYTECODE python3 -m unittest discover -s tests -p "test_*.py" -v
-   env -u PYTHONPYCACHEPREFIX -u PYTHONDONTWRITEBYTECODE python3 examples/minimal-project/run_demo.py
-   ```
+```json
+{
+  "round_kind": "verification",
+  "parent_round": 1,
+  "expected_candidate_sha256": "<SHA-256 of parent rounds/001/candidate.json file>"
+}
+```
+
+CLI contract repair uses the optional task `contract_repair_command`; without it, the orchestrator stops with contract_revision_required. The command receives `{task_config}`, `{feedback_file}`, `{out_patch}`, `{round}` and `{case_root}` placeholders and writes a JSON patch. The case_root is the new case that the orchestrator will create; do not create it from the repair command. Preserve candidate source and HEAD.
+
+To repair a frozen case-local probe, stage the corrected file outside both the worktree and new case. Return `case_inputs` as a mapping from new case-relative names to absolute staged files, and point the patched policy_files/check argv at the new case paths:
+
+```json
+{
+  "case_inputs": {
+    "inputs/probe.py": "/absolute/path/to/staged/corrected-probe.py"
+  }
+}
+```
+
+The orchestrator copies these inputs after creating the case and before issue. It rejects path escape, symlinks and overwriting generated files. External governance policies remain locked; do not modify a state/meta policy in place. For eligible repairs the orchestrator creates the linked verification manifest and skips the LLM executor.
+
+A native supervisor likewise dispatches the controller's single execute with an executor-role token, without a coding agent. The full frozen check list runs again; there is **no cross-round check cache**. Parent candidate/HEAD checks at issue, execute and acceptance reject drift. A new audit round consumes the existing max_rounds budget; the old rejection remains intact. Requirement changes or mixed code/probe failures use a normal development round.
+
+After independent acceptance, create a local commit with the final trailer:
+
+```text
+Accepted in supervised round <case> (review <review_hash_8>)
+```
+
+Integrate and report from actual records:
+
+```sh
+python3 "$DL/scripts/worktree.py" integrate --repo "$TARGET_REPO" --worktree "$WORK_REPO" --state-dir "$STATE"
+python3 "$DL/scripts/summary.py" --repo "$TARGET_REPO" --from <first_new_commit> --to HEAD
+```
+
+Report actual agent calls, checks and elapsed time where recorded. Token usage remains unknown unless supplied by the backend; do not turn prompt size or demo results into a savings claim. Respect the existing round budget and user authorization for push/deployment.
+
+## 6. Maintaining this framework
+
+- Write the cleanup plan before edits; preserve behavior with relevant regression tests.
+- Use only Python 3.10+ standard library and Git. Keep changes small and compatible.
+- Preserve role checks, single execute per audit round, candidate sealing, process-group cleanup, hash chains and offline replay. Do not rewrite old archives.
+- Run the full tests and demo before completion:
+
+```sh
+env -u PYTHONPYCACHEPREFIX -u PYTHONDONTWRITEBYTECODE python3 -m unittest discover -s tests -p "test_*.py" -v
+env -u PYTHONPYCACHEPREFIX -u PYTHONDONTWRITEBYTECODE python3 examples/minimal-project/run_demo.py
+```
+
+The demo uses simulated agents to test orchestration. It does not establish real-model review quality or token efficiency. The controller is a [trusted-local workflow guard](references/architecture.md), not an OS sandbox.

@@ -67,6 +67,21 @@
           "allowed_paths": { "type": "array", "minItems": 1, "items": { "type": "string" } },
           "protected_paths": { "type": "array", "items": { "type": "string" } },
           "checks": { "type": "array", "minItems": 1 },
+          "probe_preflight_checks": {
+            "type": "array",
+            "description": "Optional syntax/fixture checks against existing staged inputs, before issue or contract-repair recycle."
+          },
+          "case_inputs": {
+            "type": "object",
+            "description": "New inputs/ relative paths mapped to absolute staged files; generated contract files cannot be overwritten.",
+            "additionalProperties": { "type": "string" }
+          },
+          "contract_repair_command": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string" },
+            "description": "Command writing a repair patch; supports task_config, feedback_file, out_patch, round and future case_root placeholders."
+          },
           "criteria": { "type": "array", "minItems": 1 },
           "max_rounds": { "type": "integer", "minimum": 1, "maximum": 20 },
           "commit_message": { "type": "string" },

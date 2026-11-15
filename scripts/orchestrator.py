@@ -13,6 +13,8 @@ from __future__ import annotations
 import argparse
 import csv
 from datetime import datetime, timezone
+import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -20,12 +22,14 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
 DEFAULT_CONTROLLER = SCRIPTS_DIR / "controller.py"
 DEFAULT_CONTRACT = SCRIPTS_DIR / "contract.py"
 ATTRIBUTION_RE = re.compile(r"ATTRIBUTION\s*:\s*(code|contract|environment)", re.IGNORECASE)
+VERIFICATION_ONLY_RE = re.compile(r"^VERIFICATION_ONLY:\s*true\s*$", re.IGNORECASE | re.MULTILINE)
 
 
 def require(condition: bool, message: str) -> None:
@@ -159,7 +163,7 @@ def render_executor_brief(
             f"```markdown\n{prior_feedback.strip()}\n```\n"
         )
     return f"""You are the **executor** (inner loop) for supervised task `{task['id']}` (Round {round_num} of {task.get('max_rounds', 3)}, Tier {task.get('tier', 'L2')}).
-Implement the change once, run local self-checks, invoke `execute` **at most once**, and stop.
+Implement the change, use targeted checks while debugging, invoke `execute` **at most once**, and stop.
 
 ## Hard Role Boundaries
 - Repository worktree: `{repo}` (HEAD `{head}`).
@@ -178,16 +182,14 @@ Implement the change once, run local self-checks, invoke `execute` **at most onc
 {checks_lines}
 
 ## Single Submission Command
-After finishing your implementation and running your own non-mutating self-checks, run **exactly once**:
+Use targeted non-mutating checks during development. Do not pre-run the entire frozen suite just to repeat it at submission; `execute` runs that suite once. When ready, run **exactly once**:
 ```sh
 python3 "{controller_script}" execute --root "{control_root}" --token "{token_file}"
 ```
 Whether `execute` exits `0` or `1`, **stop immediately afterwards** and do NOT edit any source file after running `execute`.
 
-## Required Final Summary
-1. Files changed and key design choices.
-2. Output of `execute` and check counts.
-3. Any subtle edge cases or equivalence assumptions the independent reviewer should scrutinize.
+## Final Note
+Only report design choices, doubts, or uncovered edge cases that the receipt cannot supply. Changed paths, exit codes and check counts are already recorded; do not rewrite them in another report. Fix blocking feedback only; leave optional polish outside this candidate.
 """
 
 
@@ -204,69 +206,67 @@ def render_reviewer_brief(
     token_file: Path,
     controller_script: Path,
     contract_script: Path,
+    prior_feedback: str | None = None,
 ) -> str:
     baseline_sha = load_json(control_root / f"rounds/{round_num:03d}/baseline.json")["contract"][str(baseline_file)]
     criteria_lines = "\n".join(
         f"- `{r['id']}` [{r.get('requirement', 'required')}]: {r['description']} — Acceptance: {r['acceptance']}"
         for r in task["criteria"]
     )
-    return f"""You are the **independent cold reviewer** (outer loop) for task `{task['id']}` (Round {round_num}, Tier {task.get('tier', 'L2')}).
-You did NOT write this candidate. Do NOT trust executor self-reports; verify independently from source, logs, and probes.
+    followup = ""
+    if prior_feedback:
+        followup = f"""\n## Previous Verdict
+This is a new CLI reviewer process, not a resumed reviewer session. Focus on the previous blocking findings, the patch and related regressions; expand to cold review if scope, acceptance or critical assumptions changed. Do not turn optional polish into a repair round.
+{prior_feedback.strip()}
+"""
+    return f"""You are the **independent reviewer** for task `{task['id']}` (Round {round_num}, Tier {task.get('tier', 'L2')}).
+You did NOT write this candidate. Verify from source, sealed receipts and independent probes, not executor self-reports.
 
-## Strict Reviewer Rules
-- Do NOT edit, format, or commit any file inside `{repo}` (any mutation invalidates the sealed candidate hash).
-- Do NOT run `execute` or `recycle`, and do NOT access supervisor/executor keys.
-- Any temporary mutation/counterexample test MUST run on a copy in `/tmp`, never inside `{repo}`.
-
-## Inputs to Inspect
-- Repository worktree: `{repo}` (baseline HEAD `{head}`; run `git -C "{repo}" diff {head}` and `git -C "{repo}" status -sb`).
-- Sealed execution receipt (`rounds/{round_num:03d}/execution.json`):
+## Boundaries and Inputs
+- Repository: `{repo}`; baseline HEAD `{head}`. Compare `git diff {head}` and `git status -sb` with allowed paths `{task['allowed_paths']}`.
+- Do not edit or commit the candidate. Do not run execute/recycle or access other role keys.
+- Counterexample/mutation tests run on a copy in `/tmp`, never inside the candidate.
+- Run `python3 "{controller_script}" status --root "{control_root}"` to validate sealed receipts. Inspect logs in `{control_root}/rounds/{round_num:03d}/`.
+- Execution receipt:
 ```json
 {json.dumps({k: v for k, v in execution_summary.items() if k != 'source'}, ensure_ascii=False, indent=2)}
 ```
-- Frozen contract case root: `{case_root}` (`baseline_sha256`: `{baseline_sha}`).
 
-## Criteria to Verify (`inputs/expected.csv`)
+## Frozen Criteria
 {criteria_lines}
-
-## Verification & Verdict Protocol
-1. Check scope boundary (`git diff --name-only {head}` vs allowed paths `{task['allowed_paths']}`).
-2. Inspect check logs under `{control_root}/rounds/{round_num:03d}/` and cold-read the code diff. For L2/L3 tasks, run counterexample / mutation probes on a `/tmp` copy to verify tests actually fail when guards are removed.
-3. Write evidence files under `{case_root}/outputs/` (e.g. `{case_root}/outputs/review-evidence-r{round_num}.md`) and create `{case_root}/outputs/observations-r{round_num}.json`:
+{followup}
+## Review Protocol
+1. Check the complete diff and sealed evidence. Do not repeat the full frozen suite by default. Rerun specific checks for missing/invalid evidence, environment uncertainty, instability or a newly found risk; record why.
+2. Independently verify relevant risks: real host clicks/viewports for UI; shared-part and archive invariants for data; actual outputs vs tool instructions for model-visible contracts. Probe important guards with meaningful counterexamples; do not meet an arbitrary mutation quota. Evidence must match this candidate.
+3. Write evidence under `{case_root}/outputs/` and one `outputs/observations-r{round_num}.json`. The review object supplies the summary, unresolved code/product blockers and optional notes; comparison and feedback are generated from it:
 ```json
 {{
   "baseline_sha256": "{baseline_sha}",
   "observed_at": "<ISO-8601 UTC timestamp>",
+  "review": {{
+    "summary": "<verdict rationale and any validation-tool defect>",
+    "attribution": "code | contract | environment",
+    "verification_only": false,
+    "blockers": [],
+    "non_blocking": []
+  }},
   "rows": [
     {{
       "id": "<criterion-id>",
       "status": "PASS | FAIL | PARTIAL | SKIP",
-      "detail": "<concise factual verification finding>",
+      "detail": "<concise verification finding>",
       "evidence_level": "independent-review",
-      "evidence": ["outputs/review-evidence-r{round_num}.md"]
+      "evidence": ["outputs/<evidence-file>"]
     }}
   ]
 }}
 ```
-4. Reconcile observations with the contract engine:
+4. Each blocker identifies the criterion, reproduction, impact and required recheck. Optional notes do not block acceptance. `verification_only: true` requires attribution=contract, unchanged business acceptance, no code/product blockers and an unchanged candidate. Put the probe/fixture error in summary; mixed failures are never verification-only. Check that a corrected probe still enforces the original requirement.
+5. Submit your independent verdict in one command (accept requires execution passed and all required rows PASS; no PASS rows are invented):
 ```sh
-python3 "{contract_script}" compare --root "{case_root}" \\
-  --observations "outputs/observations-r{round_num}.json" \\
-  --out "outputs/review-r{round_num}-comparison.json"
+python3 "{controller_script}" review --root "{control_root}" --token "{token_file}" --verdict <accept|reject> --observations "outputs/observations-r{round_num}.json"
 ```
-5. Write `{case_root}/outputs/feedback-r{round_num}.md`. If rejecting, include an explicit line `ATTRIBUTION: code` (implementation defect), `ATTRIBUTION: contract` (manifest/allowlist/test-assumption defect in the contract itself), or `ATTRIBUTION: environment` (external drift/port/quota issue).
-6. Record your binding verdict:
-- To **accept** (only when execution `passed` is `true` and every required criterion is `PASS`):
-```sh
-python3 "{controller_script}" review --root "{control_root}" --token "{token_file}" \\
-  --verdict accept --feedback "{case_root}/outputs/feedback-r{round_num}.md" \\
-  --report "outputs/review-r{round_num}-comparison.json"
-```
-- To **reject**:
-```sh
-python3 "{controller_script}" review --root "{control_root}" --token "{token_file}" \\
-  --verdict reject --feedback "{case_root}/outputs/feedback-r{round_num}.md"
-```
+The existing explicit --feedback/--report path remains supported.
 """
 
 
@@ -323,20 +323,129 @@ def invoke_agent_backend(
         }
     )
 
-    brief_bytes = brief_file.read_bytes() if pass_stdin else None
+    brief = brief_file.read_text(encoding="utf-8")
+    brief_bytes = brief.encode("utf-8") if pass_stdin else None
     log_file.parent.mkdir(parents=True, exist_ok=True)
-    with log_file.open("wb") as out:
-        proc = subprocess.run(
-            argv,
-            cwd=cwd,
-            input=brief_bytes,
-            stdout=out,
-            stderr=subprocess.STDOUT,
-            env=env,
-            timeout=timeout,
-            check=False,
-        )
-    return proc.returncode
+    original_log = log_file
+    retry = 1
+    while log_file.exists():
+        retry += 1
+        log_file = original_log.with_name(f"{original_log.stem}-resume{retry}{original_log.suffix}")
+    call = {
+        "role": role,
+        "round": int(placeholders["round"]),
+        "attempt": int(placeholders.get("attempt", "1")),
+        "backend": kind,
+        "started_at": now_iso(),
+        "prompt_chars": len(brief),
+        "returncode": None,
+        "token_usage": None,
+    }
+    call_file = log_file.with_suffix(".call.json")
+    save_json(call_file, call)
+    started = time.monotonic()
+    try:
+        with log_file.open("xb") as out:
+            proc = subprocess.run(
+                argv, cwd=cwd, input=brief_bytes, stdout=out, stderr=subprocess.STDOUT,
+                env=env, timeout=timeout, check=False,
+            )
+        call["returncode"] = proc.returncode
+        return proc.returncode
+    finally:
+        call["finished_at"] = now_iso()
+        call["duration_seconds"] = round(time.monotonic() - started, 3)
+        save_json(call_file, call)
+
+
+def finish_result(state_dir: Path, summary: dict) -> dict:
+    calls = [load_json(path) for path in (state_dir / "agent-logs").glob("*.call.json")]
+    kinds = {"development": 0, "verification": 0}
+    checks = 0
+    for directory in (state_dir / "control/rounds").glob("[0-9]*"):
+        manifest = load_json(directory / "manifest.json")
+        kinds[manifest.get("round_kind", "development")] += 1
+        receipt = directory / "execution.json"
+        if receipt.is_file():
+            checks += len(load_json(receipt).get("checks", []))
+    summary["metrics"] = {
+        "agent_calls": {role: sum(c["role"] == role for c in calls) for role in ("executor", "reviewer")},
+        "agent_duration_seconds": round(sum(c.get("duration_seconds", 0) for c in calls), 3),
+        "prompt_chars": sum(c["prompt_chars"] for c in calls),
+        "checks_executed": checks,
+        "checks_reused": 0,
+        "round_kinds": kinds,
+        "token_usage": None,
+    }
+    save_json(state_dir / "orchestrator-result.json", summary)
+    return summary
+
+
+def controller_helpers():
+    spec = importlib.util.spec_from_file_location("dual_loop_preflight_checks", DEFAULT_CONTROLLER)
+    require(spec is not None and spec.loader is not None, "cannot load check runner")
+    controller = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(controller)
+    return controller
+
+
+def copy_case_inputs(case_root: Path, inputs: dict) -> None:
+    """Copy staged probe/fixture revisions into a new case without overwrites."""
+    require(isinstance(inputs, dict), "case_inputs must map case-relative inputs to absolute source files")
+    if not inputs:
+        return
+    controller = controller_helpers()
+    copies = []
+    destinations = set()
+    for relative, source in inputs.items():
+        require(isinstance(relative, str) and bool(relative), "case input destination must be a string")
+        parts = Path(relative).parts
+        require(len(parts) >= 2 and parts[0] == "inputs", "case input destination must be under inputs/")
+        target = controller.contained(case_root, relative)
+        require(not target.exists() and target not in destinations, "case input cannot overwrite existing/generated files")
+        require(isinstance(source, str) and bool(source), "case input source must be an absolute file")
+        controller.check_no_user_symlink_ancestors(Path(source), "case input source")
+        original = controller.absolute_regular(source)
+        copies.append((original, target))
+        destinations.add(target)
+    for original, target in copies:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with original.open("rb") as src, target.open("xb") as dest:
+            shutil.copyfileobj(src, dest)
+        shutil.copymode(original, target, follow_symlinks=False)
+
+
+def run_probe_preflight(task: dict, repo: Path, state_dir: Path) -> bool:
+    """Check existing staged probes/fixtures before case creation or round issue."""
+    checks = task.get("probe_preflight_checks", [])
+    require(isinstance(checks, list), "probe_preflight_checks must be a list")
+    if not checks:
+        return True
+    controller = controller_helpers()
+    original = controller.snapshot(repo)
+    head = git(repo, "rev-parse", "HEAD")
+    results = []
+    log_root = state_dir / "probe-preflight"
+    log_root.mkdir(exist_ok=True)
+    attempt = 1
+    while (log_root / f"attempt-{attempt:03d}").exists():
+        attempt += 1
+    log_dir = log_root / f"attempt-{attempt:03d}"
+    log_dir.mkdir()
+    for index, check in enumerate(checks):
+        require(isinstance(check, dict), "probe preflight check must be an object")
+        require(isinstance(check.get("id"), str) and re.fullmatch(r"[a-z0-9][a-z0-9-]*", check["id"]), "invalid probe preflight id")
+        require(isinstance(check.get("argv"), list) and bool(check["argv"]) and all(isinstance(x, str) and x for x in check["argv"]), "probe preflight argv must be a nonempty string array")
+        require(isinstance(check.get("timeout", 300), int) and 1 <= check.get("timeout", 300) <= 3600, "invalid probe preflight timeout")
+        cwd = controller.contained(repo, check.get("cwd", "."), directory=True)
+        with (log_dir / f"{index:03d}-{check['id']}.log").open("wb") as log:
+            outcome = controller.run_check(check, cwd, log)
+        intact = controller.snapshot(repo) == original and git(repo, "rev-parse", "HEAD") == head
+        results.append({"id": check["id"], **outcome, "source_unchanged": intact})
+        save_json(log_dir / "result.json", {"checks": results})
+        if outcome["exit_code"] != 0 or not intact:
+            return False
+    return True
 
 
 def issue_scoped_worker_token(authority_dir: Path, worker_tokens_dir: Path, role: str, label: str) -> Path:
@@ -512,6 +621,19 @@ def orchestrate_task(
         require(init_res.returncode == 0, f"controller init failed: {init_res.stderr.strip()}")
 
     ctrl_state = load_json(control_root / "state.json")
+    if ctrl_state["rounds"] and (state_dir / "active-task.json").is_file():
+        task = load_json(state_dir / "active-task.json")
+        require(task["id"] == task_id and Path(task["repo"]).resolve() == repo, "saved task identity differs")
+        # Keep frozen/repaired task inputs on resume, but allow an operator to
+        # supply a missing repair command or replace an unavailable backend.
+        for key in ("executor_backend", "reviewer_backend", "contract_repair_command"):
+            if key in task_orig:
+                task[key] = task_orig[key]
+    if not ctrl_state["rounds"] and not run_probe_preflight(task, repo, state_dir):
+        return finish_result(state_dir, {
+            "task_id": task_id, "status": "blocked", "blocked_reason": "probe_preflight_failed",
+            "rounds_used": 0, "finished_at": now_iso(),
+        })
     prior_case_root: Path | None = None
     prior_feedback: str | None = None
     if ctrl_state["rounds"]:
@@ -556,11 +678,12 @@ def orchestrate_task(
                 "commit": commit_sha,
                 "finished_at": now_iso(),
             }
-            save_json(state_dir / "orchestrator-result.json", summary)
-            return summary
+            return finish_result(state_dir, summary)
 
         if phase in ("idle", "rejected"):
+            verification_manifest = {}
             next_round = current_round_count + 1
+            case_root = cases_dir / f"round-{next_round:03d}"
             if next_round > max_rounds:
                 summary = {
                     "task_id": task_id,
@@ -570,8 +693,7 @@ def orchestrate_task(
                     "review_hash": ctrl_state["rounds"][-1].get("review_hash") if ctrl_state["rounds"] else None,
                     "finished_at": now_iso(),
                 }
-                save_json(state_dir / "orchestrator-result.json", summary)
-                return summary
+                return finish_result(state_dir, summary)
 
             if phase == "rejected":
                 last_dir = control_root / ctrl_state["rounds"][-1]["directory"]
@@ -585,8 +707,7 @@ def orchestrate_task(
                         "review_hash": ctrl_state["rounds"][-1]["review_hash"],
                         "finished_at": now_iso(),
                     }
-                    save_json(state_dir / "orchestrator-result.json", summary)
-                    return summary
+                    return finish_result(state_dir, summary)
                 if attribution == "contract":
                     repair_cmd = task.get("contract_repair_command")
                     if not repair_cmd:
@@ -598,8 +719,12 @@ def orchestrate_task(
                             "review_hash": ctrl_state["rounds"][-1]["review_hash"],
                             "finished_at": now_iso(),
                         }
-                        save_json(state_dir / "orchestrator-result.json", summary)
-                        return summary
+                        return finish_result(state_dir, summary)
+                    feedback = (last_dir / "feedback.md").read_text(encoding="utf-8")
+                    verification_only = bool(VERIFICATION_ONLY_RE.search(feedback))
+                    controller = controller_helpers()
+                    before_repair = controller.snapshot(repo)
+                    before_head = git(repo, "rev-parse", "HEAD")
                     patch_file = state_dir / f"contract-patch-r{next_round}.json"
                     rc = subprocess.run(
                         [
@@ -608,27 +733,47 @@ def orchestrate_task(
                                 feedback_file=str(last_dir / "feedback.md"),
                                 out_patch=str(patch_file),
                                 round=str(next_round),
+                                case_root=str(case_root),
                             )
                             for x in repair_cmd
                         ],
                         check=False,
                     ).returncode
                     require(rc == 0 and patch_file.is_file(), "contract_repair_command failed to produce patch JSON")
+                    require(
+                        controller.snapshot(repo) == before_repair and git(repo, "rev-parse", "HEAD") == before_head,
+                        "contract repair changed the candidate or HEAD; preserve it for inspection",
+                    )
                     patch_data = load_json(patch_file)
-                    for k in ("allowed_paths", "protected_paths", "checks", "criteria"):
+                    for k in ("allowed_paths", "protected_paths", "checks", "criteria", "policy_files", "case_inputs", "probe_preflight_checks"):
                         if k in patch_data:
                             task[k] = patch_data[k]
+                    if not run_probe_preflight(task, repo, state_dir):
+                        save_json(state_dir / "active-task.json", task)
+                        return finish_result(state_dir, {
+                            "task_id": task_id, "status": "blocked", "blocked_reason": "probe_preflight_failed",
+                            "rounds_used": current_round_count, "review_hash": ctrl_state["rounds"][-1]["review_hash"],
+                            "finished_at": now_iso(),
+                        })
+                    if verification_only:
+                        parent_candidate = last_dir / "candidate.json"
+                        require(parent_candidate.is_file(), "verification repair needs a sealed parent candidate")
+                        verification_manifest = {
+                            "round_kind": "verification",
+                            "parent_round": current_round_count,
+                            "expected_candidate_sha256": hashlib.sha256(parent_candidate.read_bytes()).hexdigest(),
+                        }
 
-                archive_and_revert_unauthorized_changes(
-                    repo,
-                    profile_path=Path(task["profile"]).resolve(),
-                    allowed_paths=task["allowed_paths"],
-                    protected_paths=task.get("protected_paths", []),
-                    archive_dir=state_dir / "reverted-out-of-scope" / f"before-r{next_round:03d}",
-                )
+                if not verification_manifest:
+                    archive_and_revert_unauthorized_changes(
+                        repo,
+                        profile_path=Path(task["profile"]).resolve(),
+                        allowed_paths=task["allowed_paths"],
+                        protected_paths=task.get("protected_paths", []),
+                        archive_dir=state_dir / "reverted-out-of-scope" / f"before-r{next_round:03d}",
+                    )
 
             save_json(state_dir / "active-task.json", task)
-            case_root = cases_dir / f"round-{next_round:03d}"
             reason = (
                 "Initial supervised contract"
                 if phase == "idle"
@@ -644,6 +789,7 @@ def orchestrate_task(
                 prior_case_root=prior_case_root,
                 contract_script=contract_script,
             )
+            copy_case_inputs(case_root, task.get("case_inputs", {}))
             manifest = {
                 "repo": str(repo),
                 "case_root": str(case_root),
@@ -654,6 +800,7 @@ def orchestrate_task(
                 "protected_paths": task.get("protected_paths", []),
                 "checks": task["checks"],
                 "max_rounds": max_rounds,
+                **verification_manifest,
             }
             if "require_clean_worktree" in task:
                 manifest["require_clean_worktree"] = bool(task["require_clean_worktree"])
@@ -706,61 +853,66 @@ def orchestrate_task(
         if phase == "issued":
             exec_token = issue_scoped_worker_token(authority_dir, worker_tokens_dir, "executor", f"r{round_num:03d}")
             try:
-                brief_text = render_executor_brief(
-                    task,
-                    round_num=round_num,
-                    repo=repo,
-                    head=head,
-                    control_root=control_root,
-                    case_root=case_root,
-                    token_file=exec_token,
-                    controller_script=controller_script,
-                    prior_feedback=prior_feedback,
-                )
-                brief_file = briefs_dir / f"round-{round_num:03d}-executor.md"
-                brief_file.parent.mkdir(parents=True, exist_ok=True)
-                brief_file.write_text(brief_text, encoding="utf-8")
-                placeholders = {
-                    "role": "executor",
-                    "repo": str(repo),
-                    "control_root": str(control_root),
-                    "case_root": str(case_root),
-                    "token_file": str(exec_token),
-                    "round": str(round_num),
-                    "brief_file": str(brief_file),
-                    "contract_script": str(contract_script),
-                    "controller_script": str(controller_script),
-                    "baseline_file": str(baseline_file),
-                }
-                invoke_agent_backend(
-                    task.get("executor_backend", {"kind": "claude"}),
-                    role="executor",
-                    brief_file=brief_file,
-                    log_file=logs_dir / f"round-{round_num:03d}-executor.log",
-                    cwd=repo,
-                    placeholders=placeholders,
-                )
-                post_state = load_json(control_root / "state.json")
-                if post_state["phase"] == "issued":
-                    if auto_submit:
-                        run_cli(
-                            controller_script,
-                            "execute",
-                            "--root",
-                            str(control_root),
-                            "--token",
-                            str(exec_token),
-                        )
-                    else:
-                        summary = {
-                            "task_id": task_id,
-                            "status": "blocked",
-                            "blocked_reason": "executor_did_not_submit",
-                            "rounds_used": round_num,
-                            "finished_at": now_iso(),
-                        }
-                        save_json(state_dir / "orchestrator-result.json", summary)
-                        return summary
+                if load_json(round_dir / "manifest.json").get("round_kind") == "verification":
+                    submitted = run_cli(
+                        controller_script, "execute", "--root", str(control_root), "--token", str(exec_token),
+                    )
+                    require(submitted.returncode in (0, 1), f"verification execute failed: {submitted.stderr.strip()}")
+                else:
+                    brief_text = render_executor_brief(
+                        task,
+                        round_num=round_num,
+                        repo=repo,
+                        head=head,
+                        control_root=control_root,
+                        case_root=case_root,
+                        token_file=exec_token,
+                        controller_script=controller_script,
+                        prior_feedback=prior_feedback,
+                    )
+                    brief_file = briefs_dir / f"round-{round_num:03d}-executor.md"
+                    brief_file.parent.mkdir(parents=True, exist_ok=True)
+                    brief_file.write_text(brief_text, encoding="utf-8")
+                    placeholders = {
+                        "role": "executor",
+                        "repo": str(repo),
+                        "control_root": str(control_root),
+                        "case_root": str(case_root),
+                        "token_file": str(exec_token),
+                        "round": str(round_num),
+                        "brief_file": str(brief_file),
+                        "contract_script": str(contract_script),
+                        "controller_script": str(controller_script),
+                        "baseline_file": str(baseline_file),
+                    }
+                    invoke_agent_backend(
+                        task.get("executor_backend", {"kind": "claude"}),
+                        role="executor",
+                        brief_file=brief_file,
+                        log_file=logs_dir / f"round-{round_num:03d}-executor.log",
+                        cwd=repo,
+                        placeholders=placeholders,
+                    )
+                    post_state = load_json(control_root / "state.json")
+                    if post_state["phase"] == "issued":
+                        if auto_submit:
+                            run_cli(
+                                controller_script,
+                                "execute",
+                                "--root",
+                                str(control_root),
+                                "--token",
+                                str(exec_token),
+                            )
+                        else:
+                            summary = {
+                                "task_id": task_id,
+                                "status": "blocked",
+                                "blocked_reason": "executor_did_not_submit",
+                                "rounds_used": round_num,
+                                "finished_at": now_iso(),
+                            }
+                            return finish_result(state_dir, summary)
             finally:
                 if exec_token.exists():
                     exec_token.unlink()
@@ -788,12 +940,14 @@ def orchestrate_task(
                         token_file=rev_token,
                         controller_script=controller_script,
                         contract_script=contract_script,
+                        prior_feedback=prior_feedback,
                     )
                     rev_brief_file = briefs_dir / f"round-{round_num:03d}-reviewer-a{attempt}.md"
                     rev_brief_file.parent.mkdir(parents=True, exist_ok=True)
                     rev_brief_file.write_text(rev_brief, encoding="utf-8")
                     placeholders = {
                         "role": "reviewer",
+                        "attempt": str(attempt),
                         "repo": str(repo),
                         "control_root": str(control_root),
                         "case_root": str(case_root),
@@ -831,8 +985,7 @@ def orchestrate_task(
                     "rounds_used": round_num,
                     "finished_at": now_iso(),
                 }
-                save_json(state_dir / "orchestrator-result.json", summary)
-                return summary
+                return finish_result(state_dir, summary)
 
 
 def main(argv: list[str] | None = None) -> int:

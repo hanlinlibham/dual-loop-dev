@@ -1,89 +1,80 @@
-# 标准任务书模板（Executor & Reviewer Briefs）
+# Executor 与 Reviewer 任务书
 
-手工调度子代理或自定义 `orchestrator.py` 提示词时，使用以下结构化模板。续用长会话代理时，每轮必须重发核心边界与汇报语言约束。
+从同一任务定义和当前回执生成任务书；不要每轮另写设计书、检查摘要和相同内容的反馈长文。手工宿主与CLI遵守同一规则。完整命令入口见 [AGENTS.md](../AGENTS.md)。
 
----
+## 执行者
 
-## 一、内层执行者任务书模板（Executor Brief）
+````markdown
+你是 <task_id> 第 <round> 轮的executor。
+目标：<objective>
+工作树：<repo>，HEAD：<head>
+可修改：<allowed_paths>；保护路径：<protected_paths>
+冻结验收：<criteria>；正式checks：<checks>
 
-```markdown
-你是双层监督开发流程中的 **executor（内层执行者）**，负责案例 `<case_id>` 第 `<round>` 轮（档位 `<L1|L2|L3>`）。
-你只实现一次、调用一次 `execute`，随后立即停止。请使用中文汇报。
-
-## 1. 仓库与硬边界
-- 工作树路径：`<repo_path>`（基线分支 `<branch>`，基线 HEAD `<head_sha>`）。
-- 只允许修改或新增以下白名单路径：`<allowed_paths>`。触碰任何其他源码文件将导致本轮直接失败。
-- 受保护路径（严禁修改）：`<protected_paths>`（含 `profile.json` 声明路径）。
-- 禁止执行任何改变 Git 状态的命令：禁止 `git commit / reset / checkout / stash / clean / merge / rebase / push`，保持 HEAD 不变。
-- 禁止修改合同目录 `<case_root>`、控制目录 `<control_root>`，禁止读取其他角色密钥。
-
-## 2. 本轮目标与约束
-### 现状（附文件与行号证据）
-<current_state>
-
-### 目标改动（明确写清「做什么」与「本轮不做什么」）
-<target_changes>
-
-### 等价与门禁要求
-<equivalence_and_invariants>
-
-## 3. 开发自查（实现期间可反复运行，不得带自动改源码副作用）
-<self_check_commands>
-
-## 4. 唯一正式提交命令（仅允许运行一次！）
+只在范围内实现。不得修改合同/政策/控制目录、读取其他角色密钥或执行Git提交、重置、切分支、合并、推送。
+开发中按改动做针对性自查，不要求先完整复跑正式checks。
+准备好后仅运行一次：
 ```sh
-python3 "<controller_script>" execute --root "<control_root>" --token "<executor_token_file>"
+python3 "<controller_script>" execute --root "<control_root>" --token "<executor_token>"
 ```
-无论该命令退出码为 `0` 还是 `1`，执行后严禁再触碰任何文件。
+无论成功或失败，随后停止修改候选。
+结束时只补充设计取舍、存疑点和未覆盖边界；文件、退出码、检查数由回执提供。不要自行宣布验收通过。
+````
 
-## 5. 汇报格式（不要写最终通过裁决）
-1. 每个修改文件的改动摘要与设计取舍。
-2. `execute` 返回 JSON 及各项检查通过/跳过数量。
-3. 自动化探针可能未覆盖的边界、你对等价性存疑的地方、以及发现但按范围未动的问题。
+## 独立审阅者
+
+````markdown
+你是 <task_id> 第 <round> 轮的独立reviewer，未参与编写候选。
+输入：<repo>、基线<head>、<case_root>、<round_directory>。
+审阅类型：<首次冷审 | 一次定向跟进>。
+上轮阻断项及本轮增量：<如有，仅列相关反馈>。
+
+不得修改被审工作树、调用execute/recycle或读取其他角色密钥。
+1. 核对diff/status的修改范围及not_applicable依据。
+2. 核验candidate、execution和日志对应当前候选；读相关diff。
+3. 有效封存回执无需默认全量重跑。证据缺失、环境不清、候选不一致、历史不稳定或新风险出现时，复跑相关检查并记录原因。
+4. 独立验证本轮风险：UI走真实宿主关键动作；数据/文件结构构造边界反例；模型可见行为核对实际返回和说明。关键守卫须有能发现退化的证据；可用既有反例或/tmp副本变异，不凑数量。
+5. 定向跟进只看局部patch、原反例及关联回归。目标/范围或公共契约、并发、安全假设变化，同一问题再失败或发现先前漏检时，要求全新冷审。
+6. 每个阻断项写明验收ID、触发条件、影响和复验要求。非阻断润色单独列出。
+
+将证据文件和一份observations写入case的outputs目录，真实填写各项结果。执行：
+```sh
+python3 "<controller_script>" review --root "<control_root>" --token "<reviewer_token>" \
+  --verdict <accept|reject> --observations outputs/observations.json
+```
+生成器负责兼容feedback/comparison，不自动判定PASS。返回裁决、review_hash和关键阻断项即可。
+````
+
+## Observations主结果
+
+保留合同引擎原有rows/evidence结构，新增review字段。以下是**尚未完成验证**的合法状态示意，不能原样当成通过证据：
+
+```json
+{
+  "baseline_sha256": "<冻结基线文件的SHA-256>",
+  "observed_at": "<冻结后的UTC ISO-8601时间>",
+  "review": {
+    "summary": "尚未完成行为验证",
+    "attribution": "environment",
+    "verification_only": false,
+    "blockers": ["behavior-verified：运行环境不可用，需恢复环境后复验"],
+    "non_blocking": []
+  },
+  "rows": [
+    {
+      "id": "behavior-verified",
+      "status": "NOT_RUN",
+      "detail": "环境未就绪，不能判断行为",
+      "evidence_level": "independent-review",
+      "evidence": []
+    }
+  ]
+}
 ```
 
----
-
-## 二、外层独立审阅者任务书模板（Cold Reviewer Brief）
-
-```markdown
-你是案例 `<case_id>` 第 `<round>` 轮的独立 **reviewer（外层冷审阅者）**。
-你没有编写这份候选代码。不要采信执行者的自述，一切以源码 Diff、回执日志与独立实测为准。
-
-## 1. 审阅纪律
-- 严禁修改 `<repo_path>` 内的任何文件（任何字节变动都会破坏已封存候选指纹导致无法验收）。
-- 反向变异验证与破坏性探针一律复制到 `/tmp` 临时目录中进行。
-- 禁止运行 `execute` 或 `recycle`，禁止读取其他角色密钥。
-
-## 2. 核验清单（逐条对照 `<case_root>/inputs/expected.csv`）
-1. **范围核对**：运行 `git -C "<repo_path>" diff --name-only <head_sha>` 与 `git status --porcelain`，核对是否全部落在 `<allowed_paths>` 内。
-2. **检查复核**：核对 `<control_root>/rounds/<NNN>/execution.json` 与各 `.log`，必要时独立复跑关键检查。
-3. **代码冷读**：逐行阅读 `git diff <head_sha>`，重点排查异步竞态、异常吞没、多步流水线互相覆盖（如先转占位符又被词表清空）及执行者上报的存疑点。
-4. **反向变异测试（L2/L3）**：在 `/tmp` 副本中移除新守卫或注入反例，确认测试能真实捕获失败。
-5. **适用性复核**：逐条检查标为 `not_applicable` 的条目，结合真实 Diff 判断其豁免依据是否成立。
-
-## 3. 证据落盘与裁决命令
-1. 将实测记录写入 `<case_root>/outputs/review-evidence.md`，按真实结论填写 `<case_root>/outputs/observations.json`（`baseline_sha256` 取自冻结基线）。
-2. 生成对账报告：
-   ```sh
-   python3 "<contract_script>" compare --root "<case_root>" \
-     --observations outputs/observations.json --out outputs/review-comparison.json
-   ```
-3. 编写审阅反馈 `<case_root>/outputs/feedback.md`。若驳回（`reject`），必须在反馈中显式标明归因标签之一：
-   - `ATTRIBUTION: code`（候选实现存在缺陷或测试遗漏）
-   - `ATTRIBUTION: contract`（合同假定、假替身行为或路径白名单本身有误，候选代码无需重做）
-   - `ATTRIBUTION: environment`（外部并发漂移、端口冲突或运行环境故障）
-4. 提交正式裁决：
-   ```sh
-   # 验收通过（仅当所有检查退出码为 0 且所有 required 条目均为 PASS）
-   python3 "<controller_script>" review --root "<control_root>" --token "<reviewer_token_file>" \
-     --verdict accept --feedback "<case_root>/outputs/feedback.md" --report outputs/review-comparison.json
-
-   # 驳回本轮
-   python3 "<controller_script>" review --root "<control_root>" --token "<reviewer_token_file>" \
-     --verdict reject --feedback "<case_root>/outputs/feedback.md"
-   ```
-
-## 4. 汇报内容
-给出明确裁决（Accept / Reject）、`review_hash`、每条标准的单行证据摘要、反向验证捕获情况及非阻断遗留项。
-```
+- review.summary必填；拒绝时attribution必须为code、contract或environment。blockers/non_blocking为字符串列表；blockers记录尚未解决的代码或产品缺陷。
+- rows中的PASS/FAIL必须有实际证据路径；对未运行项如实写NOT_RUN，不能默认填PASS。
+- accept要求控制器检查成功、所有required通过且没有阻断项。非阻断建议不阻止accept。
+- `verification_only: true` 仅用于已确认的纯探针/夹具问题：归因contract，blockers为空，将验证工具错误及其证据写入summary；仍须解释为何原业务标准不变。
+- CLI每次是新review进程；定向brief不等于恢复同一个reviewer。缺少独立审阅能力的宿主必须保留待审状态。
+- 旧手动接口仍可先用contract.py compare，再以 `review --feedback <文件> --report <case相对路径>` 提交；无需迁移已有归档。

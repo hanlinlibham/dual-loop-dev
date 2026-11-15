@@ -399,6 +399,40 @@ def remember(root: Path, round_: dict, path: Path) -> None:
     round_["artifacts"][str(path.relative_to(root))] = file_hash(path)
 
 
+def verification_parent(root: Path, state: dict, manifest: dict, number: int) -> tuple[Path, dict, dict] | None:
+    """Bind a verification-only round to an unchanged, independently rejected candidate."""
+    kind = manifest.get("round_kind", "development")
+    require(kind in ("development", "verification"), "invalid round_kind")
+    if kind != "verification":
+        require("parent_round" not in manifest and "expected_candidate_sha256" not in manifest,
+                "verification lineage is only valid for verification rounds")
+        return None
+    require(number > 1 and type(manifest.get("parent_round")) is int
+            and manifest["parent_round"] == number - 1,
+            "verification must reference the immediately preceding round")
+    parent = state["rounds"][number - 2]
+    directory = root / parent["directory"]
+    require(load(directory / "review.json")["verdict"] == "reject", "verification requires a rejected parent")
+    feedback = (directory / "feedback.md").read_text(encoding="utf-8")
+    attributions = re.findall(r"^ATTRIBUTION:[ \t]*(\S+)[ \t]*$", feedback, re.MULTILINE | re.IGNORECASE)
+    flags = re.findall(r"^VERIFICATION_ONLY:[ \t]*(\S+)[ \t]*$", feedback, re.MULTILINE | re.IGNORECASE)
+    require([a.lower() for a in attributions] == ["contract"]
+            and [v.lower() for v in flags] == ["true"],
+            "verification requires explicit contract-only reviewer authorization")
+    candidate_file = directory / "candidate.json"
+    require(candidate_file.is_file(), "verification parent has no sealed candidate")
+    require(manifest.get("expected_candidate_sha256") == file_hash(candidate_file),
+            "verification parent candidate hash does not match")
+    parent_manifest = load(directory / "manifest.json")
+    baseline = load(directory / "baseline.json")
+    require(manifest["repo"] == parent_manifest["repo"], "verification cannot change repository")
+    repo = Path(manifest["repo"])
+    require(git(repo, "rev-parse", "HEAD").decode().strip() == baseline["head"],
+            "verification parent HEAD changed")
+    require(snapshot(repo) == load(candidate_file), "verification parent candidate changed")
+    return directory, parent_manifest, baseline
+
+
 def prepare_round(root: Path, state: dict, manifest_file: Path, reason: str) -> None:
     manifest_file = absolute_regular(str(Path(manifest_file).absolute()))
     manifest = load(manifest_file)
@@ -538,6 +572,38 @@ def prepare_round(root: Path, state: dict, manifest_file: Path, reason: str) -> 
             "protected_paths": profile_protected,
         },
     }
+    parent = verification_parent(root, state, manifest, number)
+    if parent is not None:
+        parent_dir, parent_manifest, parent_baseline = parent
+        require(script_sha == (parent_baseline.get("contract_sha256") or parent_baseline.get("taskkit_sha256")),
+                "verification cannot replace the contract engine")
+        for key in ("allowed_paths", "protected_paths"):
+            require(manifest[key] == parent_manifest[key], f"verification cannot change {key}")
+        require(baseline["profile"] == parent_baseline["profile"], "verification cannot change profile")
+        parent_case = Path(parent_manifest["case_root"])
+        for path, expected in parent_baseline["policies"].items():
+            if parent_case not in Path(path).parents:
+                require(baseline["policies"].get(path) == expected,
+                        "verification cannot change governance policy: " + path)
+            elif path in baseline["policies"]:
+                require(baseline["policies"][path] == expected,
+                        "verification must revise probe policies in the new case")
+            else:
+                replacement = str(case / Path(path).relative_to(parent_case))
+                require(replacement in baseline["policies"],
+                        "verification must retain case-local policy input: " + path)
+        for path in baseline["policies"].keys() - parent_baseline["policies"].keys():
+            require(case in Path(path).parents, "verification policy additions must be case-local")
+        require(manifest.get("require_clean_worktree", False) == parent_manifest.get("require_clean_worktree", False),
+                "verification cannot change clean-worktree policy")
+        require([c["id"] for c in checks] == [c["id"] for c in parent_manifest["checks"]],
+                "verification must retain the complete ordered check list")
+        parent_spec = load(parent_dir / "contract/spec.json")
+        parent_contract = load(contained(parent_dir / "contract", parent_spec["baseline"]))
+        require(contract["expected_rows"] == parent_contract["expected_rows"],
+                "verification cannot change acceptance criteria")
+        for key in ("topic", "question", "scope", "baseline_timing"):
+            require(spec[key] == parent_spec[key], f"verification cannot change contract {key}")
     round_ = {
         "number": number,
         "repo": str(repo),
@@ -617,6 +683,7 @@ def execute(root: Path, state: dict, previous: str, seq: int) -> int:
     repo = Path(manifest["repo"])
     try:
         verify_inputs(manifest, baseline)
+        verification_parent(root, state, manifest, round_["number"])
         candidate = snapshot(repo)
         result["changed_paths"] = verify_boundary(manifest, baseline, candidate)
         result["head_changed_paths"] = head_changed_paths(repo)
@@ -684,6 +751,7 @@ def review(root: Path, state: dict, verdict: str, feedback_file: Path, report_fi
         execution = load(directory / "execution.json")
         require(bool(execution["passed"]), "failed execution cannot be accepted")
         verify_inputs(manifest, baseline)
+        verification_parent(root, state, manifest, round_["number"])
         current = snapshot(Path(manifest["repo"]))
         verify_boundary(manifest, baseline, current)
         require(current == execution["source"], "source changed after execution evidence was sealed")
@@ -736,6 +804,78 @@ def review(root: Path, state: dict, verdict: str, feedback_file: Path, report_fi
     state["phase"] = "accepted" if verdict == "accept" else "rejected"
 
 
+def prepare_review_submission(
+    root: Path, state: dict, verdict: str, observations_file: str
+) -> tuple[Path, str]:
+    """Generate compatibility artifacts from one independent review, never its verdict."""
+    _, directory, manifest, _ = active_inputs(root, state)
+    case = Path(manifest["case_root"])
+    observations_path = contained(case, observations_file)
+    observations = load(observations_path)
+    require(isinstance(observations, dict), "observations must be a JSON object")
+    decision = observations.get("review")
+    require(isinstance(decision, dict), "observations.review must contain the independent review")
+    summary = decision.get("summary")
+    require(isinstance(summary, str) and bool(summary.strip()), "review.summary is required")
+    for field in ("blockers", "non_blocking"):
+        require(
+            isinstance(decision.get(field, []), list)
+            and all(isinstance(item, str) and bool(item.strip()) for item in decision.get(field, [])),
+            f"review.{field} must be a list of findings",
+        )
+    blockers = decision.get("blockers", [])
+    attribution = decision.get("attribution")
+    verification_only = decision.get("verification_only", False)
+    require(isinstance(verification_only, bool), "review.verification_only must be a boolean")
+    if verdict == "reject":
+        require(attribution in {"code", "contract", "environment"}, "rejection requires review.attribution")
+    else:
+        require(not blockers, "cannot accept unresolved product blockers")
+        execution = load(directory / "execution.json")
+        require(bool(execution.get("passed")), "failed execution cannot be accepted")
+    require(
+        not verification_only or (verdict == "reject" and attribution == "contract" and not blockers),
+        "verification_only requires a contract rejection with no unresolved product blockers",
+    )
+
+    # Names derive from the supplied result, so a revised review must use a new
+    # input name instead of overwriting an earlier comparison or feedback.
+    stem = observations_path.stem
+    report_rel = f"outputs/{stem}-comparison.json"
+    feedback_path = contained(case, f"outputs/{stem}-feedback.md")
+    require(not feedback_path.exists(), "generated feedback exists; use a new observations filename")
+    compared = invoke_contract(
+        archived_contract_script(directory), "compare", case,
+        "--observations", observations_file, "--out", report_rel,
+    )
+    require(compared.returncode in (0, 1), "review comparison failed: " + compared.stderr.strip())
+    report = load(contained(case, report_rel))
+    if verdict == "accept":
+        require(
+            report.get("assessment") == "PASS"
+            and report.get("required_count", 0) > 0
+            and report.get("required_pass") == report.get("required_count"),
+            "accept requires evidence for every required criterion",
+        )
+
+    lines = [f"# Independent review: {verdict}", ""]
+    if verdict == "reject":
+        lines.extend([f"ATTRIBUTION: {attribution}", f"VERIFICATION_ONLY: {str(verification_only).lower()}", ""])
+    # Prefix reviewer prose so embedded marker-like text cannot authorize a
+    # verification round independently of the structured decision above.
+    lines.extend([*('> ' + line for line in summary.strip().splitlines()), ""])
+    for title, findings in (("Product blockers", blockers), ("Non-blocking observations", decision.get("non_blocking", []))):
+        if findings:
+            lines.extend([f"## {title}", ""])
+            for finding in findings:
+                lines.append("- " + finding.strip().replace("\n", "\n  "))
+            lines.append("")
+    lines.extend([f"Observations: {observations_file}", f"Comparison: {report_rel}"])
+    with feedback_path.open("x", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
+    return feedback_path, report_rel
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("init", "issue", "execute", "review", "recycle", "status"))
@@ -746,6 +886,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--verdict", choices=("accept", "reject"))
     parser.add_argument("--feedback", type=Path, help="external review feedback markdown/text file")
     parser.add_argument("--report", help="case-relative comparison report JSON")
+    parser.add_argument("--observations", help="case-relative independent review JSON; generates feedback and comparison")
     parser.add_argument("--from-review", help="sha256 of the previous rejecting review")
     parser.add_argument("--change-reason", help="explicit reason for recycling into a new round")
     parser.add_argument(
@@ -830,10 +971,12 @@ def main(argv: list[str] | None = None) -> int:
                     state["phase"] in ("running", "awaiting_review"),
                     "review needs a submitted or interrupted execution",
                 )
-                require(
-                    bool(args.verdict and args.feedback is not None),
-                    "review requires verdict and external feedback",
-                )
+                require(bool(args.verdict), "review requires a verdict")
+                if args.observations:
+                    require(args.feedback is None and args.report is None, "use observations or legacy feedback/report, not both")
+                    args.feedback, args.report = prepare_review_submission(root, state, args.verdict, args.observations)
+                else:
+                    require(args.feedback is not None, "review requires observations or external feedback")
                 review(root, state, args.verdict, args.feedback, args.report)
                 record(root, state, "reviewer", "review-" + args.verdict, previous, seq)
         print(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 from pathlib import Path
 import subprocess
 import sys
@@ -36,6 +37,8 @@ assert token.parent.name == "worker-tokens", f"unexpected token parent: {token}"
 assert not (token.parent / "supervisor.key").exists()
 
 if role == "executor":
+    with (marker_dir / "executor-calls").open("a") as f:
+        f.write(str(round_num) + "\\n")
     (repo / "feature.py").write_text(f"ROUND = {round_num}\\n", encoding="utf-8")
     if mode == "out_of_scope_r1" and round_num == 1:
         (repo / "stray.txt").write_text("unauthorized round 1 edit\\n", encoding="utf-8")
@@ -45,6 +48,13 @@ if role == "executor":
         subprocess.run([sys.executable, controller_py, "execute", "--root", str(control), "--token", str(token)], check=False)
 
 elif role == "reviewer":
+    if mode in ("verification", "mixed_contract") and round_num == 1:
+        fb = case / "outputs/fb.md"
+        flag = "true" if mode == "verification" else "false"
+        fb.write_text("ATTRIBUTION: contract\\nVERIFICATION_ONLY: " + flag + "\\nProbe assumption is wrong.\\n", encoding="utf-8")
+        subprocess.run([sys.executable, controller_py, "review", "--root", str(control), "--token", str(token), "--verdict", "reject", "--feedback", str(fb)], check=True)
+        raise SystemExit(0)
+
     if mode == "quota_retry_once":
         flag = marker_dir / "reviewer_interrupted_once"
         if not flag.exists():
@@ -188,6 +198,201 @@ class OrchestratorAndRoadmapTests(unittest.TestCase):
         self.assertEqual(out["status"], "blocked")
         self.assertEqual(out["blocked_reason"], "contract_revision_required")
         self.assertEqual(out["rounds_used"], 1)
+
+    def repaired_probe_task(self, *, tamper: bool = False, mode: str = "verification", max_rounds: int = 2) -> dict:
+        task = self.make_task("probe-repair", mode, max_rounds=max_rounds)
+        marker = self.markers / "checks"
+        task["checks"] = [
+            {"id": "probe", "argv": [sys.executable, "-c", "raise SystemExit(1)"]},
+            {"id": "tail", "argv": [sys.executable, "-c", f"from pathlib import Path; Path({str(marker)!r}).write_text('ran')"]},
+        ]
+        repair = self.base / "repair.py"
+        repair.write_text(
+            "import json,sys\nfrom pathlib import Path\n"
+            "task=json.loads(Path(sys.argv[1]).read_text())\n"
+            "task['checks'][0]['argv']=[sys.executable,'-c',\"print('corrected probe')\"]\n"
+            + (f"Path({str(self.repo / 'stray.txt')!r}).write_text('repair tampered with source')\n" if tamper else "")
+            + "Path(sys.argv[2]).write_text(json.dumps({'checks':task['checks']}))\n",
+            encoding="utf-8",
+        )
+        task["contract_repair_command"] = [sys.executable, str(repair), "{task_config}", "{out_patch}"]
+        return task
+
+    def run_task(self, task: dict, state: str = "verification-state") -> subprocess.CompletedProcess:
+        cfg = self.base / (state + ".json")
+        cfg.write_text(json.dumps(task), encoding="utf-8")
+        return subprocess.run(
+            [sys.executable, str(SCRIPTS / "orchestrator.py"), "--task-config", str(cfg), "--state-dir", str(self.base / state)],
+            capture_output=True, text=True, check=False,
+        )
+
+    def test_verification_repair_skips_executor_and_runs_all_checks(self) -> None:
+        res = self.run_task(self.repaired_probe_task())
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        out = json.loads(res.stdout)
+        self.assertEqual((self.markers / "executor-calls").read_text().splitlines(), ["1"])
+        self.assertEqual((self.repo / "feature.py").read_text(), "ROUND = 1\n")
+        self.assertTrue((self.markers / "checks").is_file())
+        rounds = self.base / "verification-state/control/rounds"
+        self.assertEqual(json.loads((rounds / "001/review.json").read_text())["verdict"], "reject")
+        self.assertEqual(json.loads((rounds / "002/manifest.json").read_text())["round_kind"], "verification")
+        checks = json.loads((rounds / "002/execution.json").read_text())["checks"]
+        self.assertEqual([c["id"] for c in checks], ["probe", "tail"])
+        self.assertEqual(out["metrics"]["agent_calls"], {"executor": 1, "reviewer": 2})
+        self.assertEqual(out["metrics"]["round_kinds"], {"development": 1, "verification": 1})
+        self.assertEqual(out["metrics"]["checks_executed"], 3)
+        self.assertIsNone(out["metrics"]["token_usage"])
+
+    def test_verification_repair_copies_case_local_probe_without_changing_parent(self) -> None:
+        task = self.repaired_probe_task()
+        state = self.base / "case-probe-state"
+        first_probe = state / "cases/round-001/inputs/probe.py"
+        bad_probe = self.base / "bad-probe.py"
+        bad_probe.write_text("raise SystemExit(1)\n", encoding="utf-8")
+        fixed_probe = self.base / "fixed-probe.py"
+        fixed_probe.write_text("print('corrected case-local probe')\n", encoding="utf-8")
+        task["case_inputs"] = {"inputs/probe.py": str(bad_probe)}
+        task["policy_files"].append(str(first_probe))
+        task["checks"][0]["argv"] = [sys.executable, "-B", str(first_probe)]
+        repair = self.base / "repair-case-probe.py"
+        repair.write_text(
+            "import json,sys\nfrom pathlib import Path\n"
+            "task=json.loads(Path(sys.argv[1]).read_text())\n"
+            "case=Path(sys.argv[3])\nassert not case.exists()\n"
+            "probe=case/'inputs/probe.py'\n"
+            "task['checks'][0]['argv']=[sys.executable,'-B',str(probe)]\n"
+            "task['policy_files'][-1]=str(probe)\n"
+            f"inputs={{'inputs/probe.py':{str(fixed_probe)!r}}}\n"
+            "Path(sys.argv[2]).write_text(json.dumps({'checks':task['checks'],'policy_files':task['policy_files'],'case_inputs':inputs}))\n",
+            encoding="utf-8",
+        )
+        task["contract_repair_command"] = [sys.executable, str(repair), "{task_config}", "{out_patch}", "{case_root}"]
+        res = self.run_task(task, "case-probe-state")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual((self.markers / "executor-calls").read_text().splitlines(), ["1"])
+        self.assertEqual(first_probe.read_bytes(), bad_probe.read_bytes())
+        second_probe = state / "cases/round-002/inputs/probe.py"
+        self.assertEqual(second_probe.read_bytes(), fixed_probe.read_bytes())
+        archive = state / "control/rounds/002/policies/001-probe.py"
+        self.assertEqual(archive.read_bytes(), fixed_probe.read_bytes())
+        self.assertEqual(json.loads(res.stdout)["metrics"]["checks_executed"], 3)
+
+    def test_case_inputs_reject_escape_symlinks_and_generated_file_overwrite(self) -> None:
+        spec = importlib.util.spec_from_file_location("orchestrator_case_inputs_test", SCRIPTS / "orchestrator.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        case = self.base / "case-inputs"
+        (case / "inputs").mkdir(parents=True)
+        generated = case / "inputs/expected.csv"
+        generated.write_text("preserve generated contract", encoding="utf-8")
+        source = self.base / "source.py"
+        source.write_text("print('ok')", encoding="utf-8")
+        symlink_source = self.base / "source-link.py"
+        symlink_source.symlink_to(source)
+        (case / "inputs/link").symlink_to(self.base, target_is_directory=True)
+        for destination, origin in [
+            ("../escape.py", str(source)),
+            (str(self.base / "absolute.py"), str(source)),
+            ("outputs/probe.py", str(source)),
+            ("inputs/expected.csv", str(source)),
+            ("inputs/link/escaped.py", str(source)),
+            ("inputs/probe.py", str(symlink_source)),
+            ("inputs/probe.py", "relative.py"),
+        ]:
+            with self.subTest(destination=destination, origin=origin), self.assertRaises((ValueError, OSError)):
+                module.copy_case_inputs(case, {destination: origin})
+        self.assertEqual(generated.read_text(), "preserve generated contract")
+
+    def test_repaired_probe_preflight_failure_keeps_parent_round_and_prior_logs(self) -> None:
+        task = self.repaired_probe_task()
+        task["probe_preflight_checks"] = [
+            {"id": "syntax", "argv": [sys.executable, "-c", "print('initial syntax valid')"]}
+        ]
+        repair = self.base / "repair.py"
+        repair.write_text(
+            "import json,sys\nfrom pathlib import Path\n"
+            "task=json.loads(Path(sys.argv[1]).read_text())\n"
+            "task['checks'][0]['argv']=[sys.executable,'-c',\"print('fixed probe')\"]\n"
+            "preflight=[{'id':'syntax','argv':[sys.executable,'-c',\"compile('for', '<fixed-probe>', 'exec')\"]}]\n"
+            "Path(sys.argv[2]).write_text(json.dumps({'checks':task['checks'],'probe_preflight_checks':preflight}))\n",
+            encoding="utf-8",
+        )
+        res = self.run_task(task)
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertEqual(json.loads(res.stdout)["blocked_reason"], "probe_preflight_failed")
+        state_dir = self.base / "verification-state"
+        state = json.loads((state_dir / "control/state.json").read_text())
+        self.assertEqual(state["phase"], "rejected")
+        self.assertEqual(len(state["rounds"]), 1)
+        self.assertEqual((self.markers / "executor-calls").read_text().splitlines(), ["1"])
+        logs = sorted((state_dir / "probe-preflight").glob("attempt-*/result.json"))
+        self.assertEqual(len(logs), 2)
+        self.assertEqual(json.loads(logs[0].read_text())["checks"][0]["exit_code"], 0)
+        self.assertNotEqual(json.loads(logs[1].read_text())["checks"][0]["exit_code"], 0)
+        self.assertFalse((state_dir / "cases/round-002").exists())
+        repair.write_text(
+            repair.read_text().replace("compile('for', '<fixed-probe>', 'exec')", "print('repaired syntax valid')"),
+            encoding="utf-8",
+        )
+        resumed = self.run_task(task)
+        self.assertEqual(resumed.returncode, 0, resumed.stdout + resumed.stderr)
+        self.assertEqual((self.markers / "executor-calls").read_text().splitlines(), ["1"])
+        self.assertEqual(len(list((state_dir / "probe-preflight").glob("attempt-*/result.json"))), 3)
+
+    def test_verification_repair_does_not_hide_source_tampering(self) -> None:
+        res = self.run_task(self.repaired_probe_task(tamper=True))
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        self.assertTrue((self.repo / "stray.txt").is_file())
+        self.assertEqual((self.markers / "executor-calls").read_text().splitlines(), ["1"])
+        state = json.loads((self.base / "verification-state/control/state.json").read_text())
+        self.assertEqual(len(state["rounds"]), 1)
+        self.assertFalse((self.base / "verification-state/reverted-out-of-scope").exists())
+
+    def test_verification_repair_keeps_budget_and_mixed_failures_use_executor(self) -> None:
+        res = self.run_task(self.repaired_probe_task(max_rounds=1), "budget-state")
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertEqual(json.loads(res.stdout)["status"], "budget_exhausted")
+        self.assertEqual((self.markers / "executor-calls").read_text().splitlines(), ["1"])
+        self.git("checkout", "--", "feature.py")
+        (self.markers / "executor-calls").unlink()
+        mixed = self.run_task(self.repaired_probe_task(mode="mixed_contract"), "mixed-state")
+        self.assertEqual(mixed.returncode, 0, mixed.stdout + mixed.stderr)
+        self.assertEqual((self.markers / "executor-calls").read_text().splitlines(), ["1", "2"])
+
+    def test_resume_can_supply_missing_repair_command_without_recoding(self) -> None:
+        task = self.repaired_probe_task()
+        repair = task.pop("contract_repair_command")
+        blocked = self.run_task(task)
+        self.assertEqual(blocked.returncode, 1, blocked.stdout + blocked.stderr)
+        self.assertEqual(json.loads(blocked.stdout)["blocked_reason"], "contract_revision_required")
+        task["contract_repair_command"] = repair
+        resumed = self.run_task(task)
+        self.assertEqual(resumed.returncode, 0, resumed.stdout + resumed.stderr)
+        self.assertEqual((self.markers / "executor-calls").read_text().splitlines(), ["1"])
+        self.assertEqual(json.loads(resumed.stdout)["metrics"]["agent_calls"], {"executor": 1, "reviewer": 2})
+
+    def test_probe_preflight_failure_does_not_consume_round_or_call_agents(self) -> None:
+        task = self.make_task("bad-probe", "forgot_execute")
+        task["probe_preflight_checks"] = [
+            {"id": "probe-syntax", "argv": [sys.executable, "-c", "compile('for', '<probe>', 'exec')"]}
+        ]
+        res = self.run_task(task, "preflight-state")
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        result = json.loads(res.stdout)
+        self.assertEqual(result["blocked_reason"], "probe_preflight_failed")
+        self.assertEqual(result["rounds_used"], 0)
+        self.assertFalse((self.markers / "executor-calls").exists())
+
+    def test_probe_preflight_source_mutation_stops_before_issue(self) -> None:
+        task = self.make_task("bad-preflight", "forgot_execute")
+        task["probe_preflight_checks"] = [
+            {"id": "mutating-probe", "argv": [sys.executable, "-c", "from pathlib import Path; Path('feature.py').write_text('changed')"]}
+        ]
+        res = self.run_task(task, "preflight-mutation-state")
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertEqual(json.loads(res.stdout)["rounds_used"], 0)
+        self.assertEqual((self.repo / "feature.py").read_text(), "changed")
+        self.assertFalse((self.markers / "executor-calls").exists())
 
     def test_out_of_scope_reverted_on_code_attribution_but_preserved_on_contract(self) -> None:
         # 1. ATTRIBUTION: code -> stray.txt archived under reverted-out-of-scope/before-r002 and removed so Round 2 passes
